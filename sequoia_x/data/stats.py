@@ -1,12 +1,10 @@
-"""从本地 SQLite 汇总控制台指标，仅依赖标准库。"""
+"""从本地数据库汇总控制台指标（Postgres 或 SQLite）。"""
 
-import sqlite3
-from contextlib import closing
-from pathlib import Path
+from sequoia_x.db import connect, db_exists, table_exists
 
 
 def collect_dashboard_stats(db_path: str) -> dict:
-    """从 SQLite 日 K 表汇总仪表盘指标，不触发同步。"""
+    """从日 K 表汇总仪表盘指标，不触发同步。"""
     empty: dict = {
         "latest_trade_date": None,
         "symbol_count": 0,
@@ -22,14 +20,11 @@ def collect_dashboard_stats(db_path: str) -> dict:
         "tasks_today": 0,
         "trend": [],
     }
-    if not Path(db_path).exists():
+    if not db_exists(db_path):
         return empty
 
-    with closing(sqlite3.connect(db_path)) as conn:
-        table = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='stock_daily'"
-        ).fetchone()
-        if table is None:
+    with connect(db_path) as conn:
+        if not table_exists(conn, "stock_daily"):
             return empty
 
         total = conn.execute("SELECT COUNT(*) FROM stock_daily").fetchone()[0]
@@ -38,13 +33,12 @@ def collect_dashboard_stats(db_path: str) -> dict:
 
         latest = conn.execute("SELECT MAX(date) FROM stock_daily").fetchone()[0]
         symbol_count = conn.execute(
-            "SELECT COUNT(*) FROM (SELECT symbol FROM stock_daily GROUP BY symbol)"
+            "SELECT COUNT(*) FROM (SELECT symbol FROM stock_daily GROUP BY symbol) AS t"
         ).fetchone()[0]
         latest_count = conn.execute(
             "SELECT COUNT(*) FROM stock_daily WHERE date = ?",
             (latest,),
         ).fetchone()[0]
-        # UNIQUE(symbol, date) 下，缺最新交易日的股票数即未覆盖数。
         stale_symbols = max(int(symbol_count) - int(latest_count), 0)
         invalid_rows = conn.execute(
             """
@@ -52,7 +46,7 @@ def collect_dashboard_stats(db_path: str) -> dict:
             WHERE high < low
                OR close > high
                OR close < low
-               OR IFNULL(volume, 0) <= 0
+               OR COALESCE(volume, 0) <= 0
                OR open IS NULL
                OR high IS NULL
                OR low IS NULL
@@ -102,14 +96,11 @@ def list_data_alerts(db_path: str, limit: int = 200) -> dict:
     empty = {"latest_trade_date": None, "stale": [], "invalid": []}
     if limit <= 0:
         raise ValueError("limit must be greater than zero")
-    if not Path(db_path).exists():
+    if not db_exists(db_path):
         return empty
 
-    with closing(sqlite3.connect(db_path)) as conn:
-        table = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='stock_daily'"
-        ).fetchone()
-        if table is None:
+    with connect(db_path) as conn:
+        if not table_exists(conn, "stock_daily"):
             return empty
 
         latest_row = conn.execute("SELECT MAX(date) FROM stock_daily").fetchone()
@@ -141,14 +132,14 @@ def list_data_alerts(db_path: str, limit: int = 200) -> dict:
                 CASE
                     WHEN high < low THEN '最高价低于最低价'
                     WHEN close > high OR close < low THEN '收盘价超出高低价区间'
-                    WHEN IFNULL(volume, 0) <= 0 THEN '成交量无效'
+                    WHEN COALESCE(volume, 0) <= 0 THEN '成交量无效'
                     ELSE '开高低收存在空值'
                 END AS reason
             FROM stock_daily
             WHERE high < low
                OR close > high
                OR close < low
-               OR IFNULL(volume, 0) <= 0
+               OR COALESCE(volume, 0) <= 0
                OR open IS NULL
                OR high IS NULL
                OR low IS NULL

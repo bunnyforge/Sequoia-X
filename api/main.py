@@ -2,8 +2,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import os
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from sequoia_x.data.stats import collect_dashboard_stats, list_data_alerts
@@ -18,7 +21,8 @@ strategy_hub: StrategyHub | None = None
 
 
 def get_db_path() -> str:
-    return os.environ.get("DB_PATH", "data/sequoia_v2.db")
+    # Prefer Postgres DSN in cluster; fall back to local SQLite path.
+    return os.environ.get("DATABASE_URL") or os.environ.get("DB_PATH", "data/sequoia_v2.db")
 
 
 def invalidate_stats_cache() -> None:
@@ -31,12 +35,21 @@ def invalidate_stats_cache() -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global scheduler, strategy_hub
+    db = get_db_path()
     scheduler = SyncScheduler(
-        db_path=get_db_path(),
+        db_path=db,
         config_path=os.environ.get("SYNC_CONFIG_PATH", "data/sync_scheduler.json"),
         on_complete=invalidate_stats_cache,
     )
-    strategy_hub = StrategyHub(db_path=get_db_path())
+    strategy_hub = StrategyHub(db_path=db)
+    # Ensure stock_daily + sync state exist on empty Postgres.
+    from sequoia_x.data.engine import DataEngine
+
+    class _BootSettings:
+        db_path = db
+        start_date = os.environ.get("START_DATE", "2024-01-01")
+
+    DataEngine(_BootSettings())  # type: ignore[arg-type]
     scheduler.start()
     yield
     scheduler.stop()
@@ -45,7 +58,14 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Sequoia-X API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:8002",
+        "http://127.0.0.1:8002",
+        "https://cursor.tail87959b.ts.net",
+        "http://100.76.76.54",
+    ],
+    allow_origin_regex=r"https://.*\.ts\.net",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -160,7 +180,7 @@ def sync_jobs():
         SyncJob(
             id=2,
             name="历史数据完整性校验",
-            source="SQLite",
+            source="database",
             processed=stats["synced_records"],
             success_rate=stats["completeness_rate"],
             status=quality_status,
@@ -240,3 +260,9 @@ def run_strategy(key: str):
     except RuntimeError as exc:
         status = 409 if "正在运行" in str(exc) else 404
         raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+# Serve Vite build last so /api/* routes take precedence
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend")
