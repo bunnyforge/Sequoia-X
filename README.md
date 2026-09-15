@@ -49,7 +49,7 @@ powershell -ExecutionPolicy Bypass -File deploy\scripts\bootstrap.ps1
 # http://127.0.0.1:8002/
 ```
 
-换机器：先 `docker compose stop`，再拷贝整个仓库（含 `data/postgres/`；Postgres 必须先停再拷），新机器上 `docker compose up -d --build`。等价做法是 `pg_dump` / `restore-db.sh`。
+换机器：先 `docker compose stop`，再拷贝 **`/workspace/sequoia-x/postgres`**（Postgres 必须先停再拷；该目录由安装脚本自动创建），新机器上同样放到 `/workspace/sequoia-x/postgres` 后 `docker compose up -d --build`。等价做法是 `pg_dump` / `restore-db.sh`。
 
 ## 本地开发 | Quick Start
 
@@ -99,7 +99,7 @@ Sequoia-X/
 ├── pyproject.toml               # 依赖声明 + ruff/pytest 配置
 ├── docker-compose.yml           # 生产部署：Postgres + Web
 ├── Dockerfile                   # 前端构建 + API 镜像
-├── data/                        # 运行时数据（不入 git）；Compose 使用 data/postgres/
+├── data/                        # 本地 SQLite 等（不入 git）；Compose Postgres 在 /workspace/sequoia-x/postgres
 
 ├── sequoia_x/
 │   ├── core/
@@ -124,7 +124,7 @@ Sequoia-X/
 
 - **数据源**：[baostock](http://baostock.com)（免费、无需注册、无限流）
 - **复权方式**：后复权（hfq）— 历史价格不变，适合增量存储，避免除权导致数据错乱
-- **存储**：Docker Compose 使用 Postgres（`data/postgres/`）；业务配置与行情同库，整目录拷到另一台即可。本地 `python main.py` 在未设置 `DATABASE_URL` 时回退 SQLite（`data/sequoia_v2.db`）
+- **存储**：Docker Compose 使用 Postgres（宿主机 **`/workspace/sequoia-x/postgres`**，脚本会自动 `mkdir`）；业务配置与行情同库，拷该目录即可迁机。本地 `python main.py` 在未设置 `DATABASE_URL` 时回退 SQLite（`data/sequoia_v2.db`）
 - **日常增量**：8 进程并行通过 baostock 拉取，2~3 分钟完成全市场更新
 
 ---

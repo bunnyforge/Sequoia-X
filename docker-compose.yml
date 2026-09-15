@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: sequoia
       POSTGRES_PASSWORD: sequoia
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - ${SEQUOIA_PGDATA:-/workspace/sequoia-x/postgres}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sequoia -d sequoia"]
       interval: 5s

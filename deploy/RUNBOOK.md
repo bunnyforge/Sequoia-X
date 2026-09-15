@@ -18,7 +18,7 @@ Already have Docker and only want to start:
 ./install.sh --skip-install
 ```
 
-Data lives in **`./data/postgres`** (bind-mounted to `/var/lib/postgresql/data`). Do not commit that directory.
+Data lives in **`/workspace/sequoia-x/postgres`** (bind-mounted to `/var/lib/postgresql/data`). Install/bootstrap scripts create that directory if missing. It is outside the git repo.
 
 ---
 
@@ -35,6 +35,7 @@ Data lives in **`./data/postgres`** (bind-mounted to `/var/lib/postgresql/data`)
 ```bash
 git clone https://github.com/bunnyforge/Sequoia-X.git
 cd Sequoia-X
+mkdir -p /workspace/sequoia-x/postgres   # created automatically by ./install.sh
 docker compose up -d --build
 docker compose ps
 curl -sS http://127.0.0.1:8002/api/health
@@ -57,7 +58,7 @@ sudo tailscale serve --bg 8002
 | Path | Role |
 |------|------|
 | `docker-compose.yml` | `db` (postgres:16-bookworm) + `app` |
-| `data/postgres/` | Postgres data directory (copy this to migrate machines) |
+| `/workspace/sequoia-x/postgres` | Postgres data directory (copy this to migrate machines) |
 | `Dockerfile` | frontend build + Python API |
 
 `DATABASE_URL` inside the app container:
@@ -77,7 +78,7 @@ Product settings (strategies, sync interval/retries, `start_date`, run history) 
 ```bash
 docker compose logs -f app
 docker compose restart app
-docker compose down          # stop; keep data/postgres
+docker compose down          # stop; keep /workspace/sequoia-x/postgres
 docker compose down -v       # do not use — there is no named volume; data is the bind mount
 ```
 
@@ -97,8 +98,8 @@ On the old machine:
 
 ```bash
 docker compose stop
-# copy the repo including data/postgres
-# example: rsync -aH --numeric-ids ./ other:/path/Sequoia-X/
+# copy the actual pgdata dir (not only the git repo)
+# example: rsync -aH --numeric-ids /workspace/sequoia-x/postgres/ other:/workspace/sequoia-x/postgres/
 ```
 
 On the new machine (same `docker-compose.yml` in the repo):
@@ -108,7 +109,7 @@ docker compose up -d --build
 curl -sS http://127.0.0.1:8002/api/health
 ```
 
-Do not copy `data/postgres` while Postgres is running. After start, strategies, sync settings, and market data should already be there.
+Do not copy `/workspace/sequoia-x/postgres` while Postgres is running. After start, strategies, sync settings, and market data should already be there. A durable `/workspace` survives reboot; ephemeral disks still lose it.
 
 ---
 
@@ -126,7 +127,7 @@ Restore into a **running** stack (replaces objects in db `sequoia`):
 docker compose restart app
 ```
 
-The dump includes market data **and** product config (`sync_config`, `strategy_config`, run history). Use this instead of copying `data/postgres` when you cannot copy the data directory (or for the one-time move off k3s/CNPG).
+The dump includes market data **and** product config (`sync_config`, `strategy_config`, run history). Use this instead of copying `/workspace/sequoia-x/postgres` when you cannot copy the data directory (or for the one-time move off k3s/CNPG).
 
 ---
 

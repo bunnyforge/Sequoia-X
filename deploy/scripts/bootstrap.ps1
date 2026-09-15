@@ -53,6 +53,14 @@ if (-not $SkipInstall) {
 Wait-Docker
 docker compose version | Out-Null
 
+# Compose bind is always /workspace/sequoia-x/postgres (Docker Desktop Linux VM).
+# Also create C:\workspace\... so a Windows-side directory exists if Docker maps it.
+$pgUnix = "/workspace/sequoia-x/postgres"
+$pgWin = "C:\workspace\sequoia-x\postgres"
+New-Item -ItemType Directory -Force -Path $pgWin | Out-Null
+$env:SEQUOIA_PGDATA = $pgUnix
+Write-Step "Postgres data directory: $pgUnix (host also $pgWin)"
+
 Write-Step "Building and starting containers (first run can take several minutes)"
 docker compose up -d --build
 docker compose ps

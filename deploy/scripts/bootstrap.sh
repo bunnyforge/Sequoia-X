@@ -121,6 +121,16 @@ esac
 wait_docker
 as_root docker compose version >/dev/null 2>&1 || docker compose version >/dev/null 2>&1 || die "docker compose plugin missing"
 
+SEQUOIA_PGDATA="${SEQUOIA_PGDATA:-/workspace/sequoia-x/postgres}"
+export SEQUOIA_PGDATA
+if mkdir -p "$SEQUOIA_PGDATA" 2>/dev/null; then
+  :
+else
+  as_root mkdir -p "$SEQUOIA_PGDATA" || die "could not create $SEQUOIA_PGDATA"
+  as_root chmod a+rwx /workspace /workspace/sequoia-x "$SEQUOIA_PGDATA" 2>/dev/null || true
+fi
+log "Postgres data directory: $SEQUOIA_PGDATA"
+
 log "Building and starting containers (first run downloads images; can take several minutes)"
 dc up -d --build
 dc ps
