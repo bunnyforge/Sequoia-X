@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
-import sqlite3
-from contextlib import closing
+from sequoia_x.db import connect
 
 from sequoia_x.backtest.double_buy import DoubleBuyParams, DoubleBuyResult, run_double_buy
 
@@ -28,7 +27,7 @@ def load_closes(db_path: str, symbol: str, start: str | None) -> tuple[list[str]
         sql += " AND date >= ?"
         params.append(start)
     sql += " ORDER BY date"
-    with closing(sqlite3.connect(db_path)) as conn:
+    with connect(db_path) as conn:
         rows = conn.execute(sql, params).fetchall()
     dates = [str(row[0]) for row in rows]
     closes = [float(row[1]) for row in rows]
@@ -95,7 +94,7 @@ def main() -> None:
     parser.add_argument(
         "--db",
         default=os.environ.get("DB_PATH", "data/sequoia_v2.db"),
-        help="SQLite 路径",
+        help="数据库路径或 DATABASE_URL",
     )
     parser.add_argument(
         "--symbols",

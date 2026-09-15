@@ -1,13 +1,11 @@
-"""策略开关和参数落在 SQLite。"""
+"""策略开关和参数落在数据库（Postgres 或 SQLite）。"""
 
 from __future__ import annotations
 
 import json
-import sqlite3
-from contextlib import closing
 from datetime import datetime, timezone
-from pathlib import Path
 
+from sequoia_x.db import connect, ensure_parent_dir
 from sequoia_x.strategy.catalog import CATALOG, default_params
 
 
@@ -16,9 +14,8 @@ def _now() -> str:
 
 
 def ensure_strategy_tables(db_path: str) -> None:
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(db_path, timeout=30)) as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
+    ensure_parent_dir(db_path)
+    with connect(db_path) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS strategy_config (
@@ -46,17 +43,17 @@ def ensure_strategy_tables(db_path: str) -> None:
         for item in CATALOG:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO strategy_config (strategy_key, enabled, params_json, updated_at)
+                INSERT INTO strategy_config (strategy_key, enabled, params_json, updated_at)
                 VALUES (?, 0, ?, ?)
+                ON CONFLICT (strategy_key) DO NOTHING
                 """,
                 (item["key"], json.dumps(default_params(item["key"]), ensure_ascii=False), now),
             )
-        conn.commit()
 
 
 def load_strategy_configs(db_path: str) -> dict[str, dict]:
     ensure_strategy_tables(db_path)
-    with closing(sqlite3.connect(db_path, timeout=30)) as conn:
+    with connect(db_path) as conn:
         rows = conn.execute(
             "SELECT strategy_key, enabled, params_json FROM strategy_config"
         ).fetchall()
@@ -99,7 +96,7 @@ def load_strategy_configs(db_path: str) -> dict[str, dict]:
 def save_strategy_config(db_path: str, key: str, enabled: bool, params: dict) -> None:
     ensure_strategy_tables(db_path)
     merged = {**default_params(key), **params}
-    with closing(sqlite3.connect(db_path, timeout=30)) as conn:
+    with connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO strategy_config (strategy_key, enabled, params_json, updated_at)
@@ -111,12 +108,11 @@ def save_strategy_config(db_path: str, key: str, enabled: bool, params: dict) ->
             """,
             (key, 1 if enabled else 0, json.dumps(merged, ensure_ascii=False), _now()),
         )
-        conn.commit()
 
 
 def save_strategy_run(db_path: str, key: str, fields: dict) -> None:
     ensure_strategy_tables(db_path)
-    with closing(sqlite3.connect(db_path, timeout=30)) as conn:
+    with connect(db_path) as conn:
         current = conn.execute(
             "SELECT at, ok, running, message, picks_json, extra_json FROM strategy_run WHERE strategy_key = ?",
             (key,),
@@ -148,4 +144,3 @@ def save_strategy_run(db_path: str, key: str, fields: dict) -> None:
             """,
             (key, at, ok, running, message, picks_json, extra_json),
         )
-        conn.commit()

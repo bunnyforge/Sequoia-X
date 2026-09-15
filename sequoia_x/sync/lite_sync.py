@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import closing
 from datetime import date, timedelta
-from pathlib import Path
 from typing import Callable
+
+from sequoia_x.db import column_names, connect, db_exists, ensure_parent_dir
 
 _UPSERT_SQL = """
 INSERT INTO stock_daily
@@ -71,11 +70,12 @@ def _day_before(value: str) -> str:
 
 def ensure_sync_state(db_path: str) -> None:
     """维护每只股票的首尾日期，避免每次扫描全部日 K。"""
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(db_path, timeout=30)) as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
+    ensure_parent_dir(db_path)
+    with connect(db_path) as conn:
+        if not conn.postgres:
+            conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(_CREATE_STATE_SQL)
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(stock_sync_state)")}
+        columns = column_names(conn, "stock_sync_state")
         if "first_date" not in columns:
             conn.execute("ALTER TABLE stock_sync_state ADD COLUMN first_date TEXT")
         if "failed_date" not in columns:
@@ -101,11 +101,10 @@ def ensure_sync_state(db_path: str) -> None:
                 WHERE first_date IS NULL
                 """
             )
-        conn.commit()
 
 
 def _latest_known_date(db_path: str) -> str | None:
-    with closing(sqlite3.connect(db_path, timeout=30)) as conn:
+    with connect(db_path) as conn:
         row = conn.execute("SELECT MAX(last_date) FROM stock_sync_state").fetchone()
     return row[0] if row and row[0] else None
 
@@ -190,7 +189,7 @@ def apply_universe(db_path: str, listed: set[str], start_date: str) -> dict:
         raise RuntimeError("股票列表为空，已跳过增删以免误删本地数据")
     ensure_sync_state(db_path)
     seed = _day_before(start_date)
-    with closing(sqlite3.connect(db_path, timeout=30)) as conn:
+    with connect(db_path) as conn:
         local = {
             row[0]
             for row in conn.execute("SELECT symbol FROM stock_sync_state")
@@ -239,8 +238,8 @@ def _range_for_symbol(last_date: str, target_date: str, failed_date: str | None)
 def build_missing_tasks(db_path: str, target_date: str) -> list[tuple[str, str, str]]:
     """增量：只补 last_date 落后于目标日的股票；失败票只重试失败日。"""
     ensure_sync_state(db_path)
-    with closing(sqlite3.connect(db_path, timeout=30)) as conn:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(stock_sync_state)")}
+    with connect(db_path) as conn:
+        columns = column_names(conn, "stock_sync_state")
         failed_sql = "failed_date" if "failed_date" in columns else "NULL"
         rows = conn.execute(
             f"""
@@ -268,8 +267,8 @@ def build_full_tasks(
     """全量：从起始日补缺口；失败票截断到失败日，不往后写。"""
     ensure_sync_state(db_path)
     history_from = first_open or start_date
-    with closing(sqlite3.connect(db_path, timeout=30)) as conn:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(stock_sync_state)")}
+    with connect(db_path) as conn:
+        columns = column_names(conn, "stock_sync_state")
         failed_sql = "failed_date" if "failed_date" in columns else "NULL"
         rows = conn.execute(
             f"""
@@ -419,7 +418,7 @@ def _upsert(
             last_date, first_date = previous
             bounds[item_symbol] = (max(last_date, day), min(first_date, day))
     with _write_lock:
-        with closing(sqlite3.connect(db_path, timeout=30)) as conn:
+        with connect(db_path) as conn:
             if rows:
                 conn.executemany(_UPSERT_SQL, rows)
                 conn.executemany(
@@ -541,7 +540,7 @@ def run_market_sync(
     on_status: Callable[[str], None] | None = None,
 ) -> dict:
     """先同步股票池，再按增量或全量补日 K。"""
-    if not Path(db_path).exists():
+    if not db_exists(db_path):
         raise FileNotFoundError(f"数据库不存在：{db_path}")
     if mode not in {"incremental", "full"}:
         raise ValueError(f"未知同步模式：{mode}")
