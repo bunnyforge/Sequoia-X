@@ -1,6 +1,6 @@
 # Sequoia-X — Docker Compose deploy
 
-Production path is **Docker Compose** (Postgres 16 + app). k3s / CloudNativePG is no longer used.
+Production path is **Docker Compose** (Postgres 16 + app).
 
 One-shot (installs Docker + Compose if needed, builds and starts):
 
@@ -127,7 +127,7 @@ Restore into a **running** stack (replaces objects in db `sequoia`):
 docker compose restart app
 ```
 
-The dump includes market data **and** product config (`sync_config`, `strategy_config`, run history). Use this instead of copying `/workspace/sequoia-x/postgres` when you cannot copy the data directory (or for the one-time move off k3s/CNPG).
+The dump includes market data **and** product config (`sync_config`, `strategy_config`, run history). Use this instead of copying `/workspace/sequoia-x/postgres` when you cannot copy the data directory.
 
 ---
 
