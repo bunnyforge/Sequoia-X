@@ -22,7 +22,7 @@ class LimitUpShakeoutStrategy(BaseStrategy):
     """
 
     webhook_key: str = "shakeout"
-    _MIN_BARS: int = 3  # 至少需要 3 根 K 线（前日、昨日、今日）
+    default_params = {"limit_up": 1.095, "volume_mult": 2.0}
 
     def run(self) -> list[str]:
         """
@@ -36,8 +36,8 @@ class LimitUpShakeoutStrategy(BaseStrategy):
 
         for symbol in symbols:
             try:
-                df = self.engine.get_ohlcv(symbol)
-                if len(df) < self._MIN_BARS:
+                df = self.engine.get_recent_ohlcv(symbol, limit=3)
+                if len(df) < 3:
                     continue
 
                 # 取最近三根 K 线（向量化索引，无 iterrows）
@@ -46,11 +46,9 @@ class LimitUpShakeoutStrategy(BaseStrategy):
                 today = df.iloc[-1]  # 今日
 
                 # 条件 1：昨日涨停
-                limit_up_yesterday = prev1["close"] >= prev2["close"] * 1.095
-                # 条件 2：今日收阴
+                limit_up_yesterday = prev1["close"] >= prev2["close"] * float(self.params["limit_up"])
                 bearish_today = today["close"] < today["open"]
-                # 条件 3：今日放量
-                volume_surge = today["volume"] > prev1["volume"] * 2.0
+                volume_surge = today["volume"] > prev1["volume"] * float(self.params["volume_mult"])
                 # 条件 4：支撑不破
                 support_hold = today["low"] >= prev1["close"]
 

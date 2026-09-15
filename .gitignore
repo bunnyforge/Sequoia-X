@@ -18,6 +18,15 @@ ENV/
 
 # 数据库文件
 data/*.db
+data/*.migrated
+data/sync_scheduler.json
+
+# 前端依赖与构建
+node_modules/
+frontend/dist/
+
+# 根目录误生成的空 lockfile（前端 lock 在 frontend/）
+/package-lock.json
 
 # 环境变量
 .env

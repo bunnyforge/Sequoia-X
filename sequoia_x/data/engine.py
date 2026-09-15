@@ -1,11 +1,12 @@
 """数据引擎模块：负责 SQLite 行情数据存储与 baostock 增量同步。"""
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
+from typing import Protocol
 
 import pandas as pd
 
-from sequoia_x.core.config import Settings
 from sequoia_x.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -30,13 +31,34 @@ _CREATE_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_symbol_date ON stock_daily (symbol, date);
 """
 
+_UPSERT_DAILY_SQL = """
+INSERT INTO stock_daily
+    (symbol, date, open, high, low, close, volume, turnover)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, date) DO UPDATE SET
+    open = excluded.open,
+    high = excluded.high,
+    low = excluded.low,
+    close = excluded.close,
+    volume = excluded.volume,
+    turnover = excluded.turnover
+"""
 
-def _bs_fetch_batch(tasks: list) -> list:
-    """多进程 worker：独立 login，批量拉取 baostock 数据。"""
+
+def _bs_worker_init() -> None:
+    """多进程 worker 初始化：每个进程独立登录 baostock。"""
     import baostock as bs
+
     bs.login()
+
+
+def _bs_fetch_one(task: tuple) -> list:
+    """多进程 worker：拉取一只股票，完成后立即返回结果。"""
+    import baostock as bs
+
+    symbol, bs_code, start, end = task
     results = []
-    for symbol, bs_code, start, end in tasks:
+    try:
         rs = bs.query_history_k_data_plus(
             bs_code,
             "date,open,high,low,close,volume,amount",
@@ -46,31 +68,41 @@ def _bs_fetch_batch(tasks: list) -> list:
             adjustflag="1",  # 后复权
         )
         if rs.error_code != "0":
-            continue
+            return results
         while rs.next():
             results.append([symbol] + rs.get_row_data())
-    bs.logout()
+    except Exception:
+        # 单只股票失败不应阻塞其他任务的进度。
+        return []
     return results
+
+
+class DataSettings(Protocol):
+    db_path: str
+    start_date: str
 
 
 class DataEngine:
     """行情数据引擎，负责 SQLite 存储和 baostock 数据同步。"""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: DataSettings) -> None:
         self.db_path: str = settings.db_path
         self.start_date: str = settings.start_date
         self._init_db()
 
     def _init_db(self) -> None:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(_CREATE_TABLE_SQL)
             conn.execute(_CREATE_INDEX_SQL)
             conn.commit()
+        from sequoia_x.sync.lite_sync import ensure_sync_state
+
+        ensure_sync_state(self.db_path)
         logger.info(f"数据库初始化完成：{self.db_path}")
 
     def _get_last_date(self, symbol: str) -> str | None:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             row = conn.execute(
                 "SELECT MAX(date) FROM stock_daily WHERE symbol = ?",
                 (symbol,),
@@ -78,13 +110,62 @@ class DataEngine:
         return row[0] if row and row[0] else None
 
     def get_ohlcv(self, symbol: str) -> pd.DataFrame:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             df = pd.read_sql(
                 "SELECT * FROM stock_daily WHERE symbol = ? ORDER BY date",
                 conn,
                 params=(symbol,),
             )
         return df
+
+    def get_recent_ohlcv(self, symbol: str, limit: int = 120) -> pd.DataFrame:
+        """读取最近的日线数据，避免策略计算加载完整历史。"""
+        if limit <= 0:
+            raise ValueError("limit must be greater than zero")
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            df = pd.read_sql(
+                """
+                SELECT * FROM (
+                    SELECT * FROM stock_daily
+                    WHERE symbol = ?
+                    ORDER BY date DESC
+                    LIMIT ?
+                )
+                ORDER BY date
+                """,
+                conn,
+                params=(symbol, limit),
+            )
+        return df
+
+    def _upsert_daily_data(self, df: pd.DataFrame) -> int:
+        """事务性写入日线数据，不因部分同步失败而删除已有记录。"""
+        if df.empty:
+            return 0
+
+        columns = ["symbol", "date", "open", "high", "low", "close", "volume", "turnover"]
+        rows = list(df[columns].itertuples(index=False, name=None))
+        latest: dict[str, tuple[str, str]] = {}
+        for symbol, trade_date, *_rest in rows:
+            day = str(trade_date)
+            previous = latest.get(str(symbol))
+            if previous is None:
+                latest[str(symbol)] = (day, day)
+            else:
+                last_date, first_date = previous
+                latest[str(symbol)] = (max(last_date, day), min(first_date, day))
+        from sequoia_x.sync.lite_sync import _UPSERT_STATE_SQL, ensure_sync_state
+
+        ensure_sync_state(self.db_path)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.executemany(_UPSERT_DAILY_SQL, rows)
+            conn.executemany(
+                _UPSERT_STATE_SQL,
+                [(symbol, last_date, first_date) for symbol, (last_date, first_date) in latest.items()],
+            )
+            conn.commit()
+        return len(rows)
 
     @staticmethod
     def _to_baostock_code(symbol: str) -> str:
@@ -95,65 +176,16 @@ class DataEngine:
     # ── 数据同步 ──
 
     def sync_today_bulk(self) -> int:
-        """多进程并行通过 baostock 拉取增量数据（后复权），写入 SQLite。"""
-        from datetime import date, timedelta
-        from multiprocessing import Pool
+        """先同步股票池，再按缺口增量补日 K。"""
+        from sequoia_x.sync.lite_sync import run_market_sync
 
-        today_str = date.today().strftime("%Y-%m-%d")
-
-        tasks = []
-        with sqlite3.connect(self.db_path) as conn:
-            rows = conn.execute(
-                "SELECT symbol, MAX(date) FROM stock_daily GROUP BY symbol"
-            ).fetchall()
-
-        if not rows:
-            logger.warning("本地无股票数据，请先执行 --backfill")
-            return 0
-
-        for symbol, last_date in rows:
-            if last_date and last_date >= today_str:
-                continue
-            start = today_str
-            if last_date:
-                start = (date.fromisoformat(last_date) + timedelta(days=1)).strftime("%Y-%m-%d")
-            tasks.append((symbol, self._to_baostock_code(symbol), start, today_str))
-
-        if not tasks:
-            logger.info("所有股票已是最新，无需更新")
-            return 0
-
-        logger.info(f"需要更新 {len(tasks)} 只股票，启动多进程并行拉取...")
-
-        n_workers = min(8, len(tasks))
-        chunks = [tasks[i::n_workers] for i in range(n_workers)]
-
-        with Pool(n_workers) as pool:
-            batch_results = pool.map(_bs_fetch_batch, chunks)
-
-        all_rows = []
-        for batch in batch_results:
-            all_rows.extend(batch)
-
-        if not all_rows:
-            logger.info("无新数据（可能非交易日）")
-            return 0
-
-        df = pd.DataFrame(all_rows, columns=["symbol", "date", "open", "high", "low", "close", "volume", "turnover"])
-        for col in ["open", "high", "low", "close", "volume", "turnover"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        df = df.dropna(subset=["close"])
-        df = df[df["volume"] > 0]
-
-        count = len(df)
-        with sqlite3.connect(self.db_path) as conn:
-            for d in df["date"].unique().tolist():
-                conn.execute("DELETE FROM stock_daily WHERE date = ?", (d,))
-            df.to_sql("stock_daily", conn, if_exists="append", index=False, method="multi", chunksize=500)
-            conn.commit()
-
-        logger.info(f"sync_today_bulk: 写入 {count} 条数据")
-        return count
+        result = run_market_sync(
+            self.db_path,
+            mode="incremental",
+            start_date=self.start_date,
+        )
+        logger.info(result.get("message") or "增量同步完成")
+        return int(result.get("written") or 0)
 
     def backfill(self, symbols: list[str]) -> None:
         """通过 baostock 批量回填历史日 K 线数据（后复权）。
@@ -275,7 +307,7 @@ class DataEngine:
                 df = df[["symbol", "date", "open", "high", "low", "close", "volume", "turnover"]]
 
                 try:
-                    with sqlite3.connect(self.db_path) as conn:
+                    with closing(sqlite3.connect(self.db_path)) as conn:
                         df.to_sql(
                             "stock_daily", conn, if_exists="append",
                             index=False, method="multi", chunksize=500,
@@ -326,7 +358,7 @@ class DataEngine:
             bs.logout()
 
     def get_local_symbols(self) -> list[str]:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             rows = conn.execute(
                 "SELECT DISTINCT symbol FROM stock_daily"
             ).fetchall()

@@ -33,7 +33,7 @@ def test_notification_contains_all_symbols(symbols: list[str]) -> None:
     settings = make_settings()
     notifier = FeishuNotifier(settings)
 
-    with patch("requests.post") as mock_post:
+    with patch.object(notifier, "_get_stock_names", return_value={}), patch("requests.post") as mock_post:
         mock_post.return_value = MagicMock(status_code=200)
         notifier.send(symbols=symbols, strategy_name="TestStrategy")
 
@@ -54,7 +54,7 @@ def test_notification_uses_config_url(webhook_url: str) -> None:
     settings = make_settings(webhook_url=webhook_url)
     notifier = FeishuNotifier(settings)
 
-    with patch("requests.post") as mock_post:
+    with patch.object(notifier, "_get_stock_names", return_value={}), patch("requests.post") as mock_post:
         mock_post.return_value = MagicMock(status_code=200)
         notifier.send(symbols=["000001"], strategy_name="Test", webhook_key="default")
 
@@ -84,7 +84,7 @@ def test_http_failure_logs_error(status_code: int) -> None:
     handler = _ListHandler(_logging.ERROR)
     feishu_logger.addHandler(handler)
     try:
-        with patch("requests.post") as mock_post:
+        with patch.object(notifier, "_get_stock_names", return_value={}), patch("requests.post") as mock_post:
             mock_post.return_value = MagicMock(status_code=status_code, text="error")
             notifier.send(symbols=["000001"], strategy_name="Test")
     finally:

@@ -20,6 +20,7 @@ class MaVolumeStrategy(BaseStrategy):
     """
 
     webhook_key: str = "ma_volume"
+    default_params = {"ma_fast": 5, "ma_slow": 20, "volume_mult": 1.5}
 
     def run(self) -> list[str]:
         """
@@ -33,24 +34,25 @@ class MaVolumeStrategy(BaseStrategy):
 
         for symbol in symbols:
             try:
-                df = self.engine.get_ohlcv(symbol)
-                if len(df) < 20:
+                ma_fast = int(self.params["ma_fast"])
+                ma_slow = int(self.params["ma_slow"])
+                volume_mult = float(self.params["volume_mult"])
+                df = self.engine.get_recent_ohlcv(symbol, limit=ma_slow)
+                if len(df) < ma_slow:
                     continue
 
-                # 向量化计算均线和成交量均值
-                df["ma5"] = df["close"].rolling(5).mean()
-                df["ma20"] = df["close"].rolling(20).mean()
-                df["vol_ma20"] = df["volume"].rolling(20).mean()
+                df["ma_fast"] = df["close"].rolling(ma_fast).mean()
+                df["ma_slow"] = df["close"].rolling(ma_slow).mean()
+                df["vol_ma"] = df["volume"].rolling(ma_slow).mean()
 
-                # 取最后两行判断金叉（昨日 ma5 < ma20，今日 ma5 > ma20）
                 last = df.iloc[-1]
                 prev = df.iloc[-2]
 
                 golden_cross = (
-                    prev["ma5"] < prev["ma20"]
-                    and last["ma5"] > last["ma20"]
+                    prev["ma_fast"] < prev["ma_slow"]
+                    and last["ma_fast"] > last["ma_slow"]
                 )
-                volume_surge = last["volume"] > last["vol_ma20"] * 1.5
+                volume_surge = last["volume"] > last["vol_ma"] * volume_mult
 
                 if golden_cross and volume_surge:
                     selected.append(symbol)

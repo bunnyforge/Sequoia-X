@@ -32,7 +32,7 @@ def test_strategy_run_returns_list_of_str(symbols: list[str]) -> None:
         engine = DataEngine(settings)
 
         with patch.object(engine, "get_all_symbols", return_value=symbols):
-            with patch.object(engine, "get_ohlcv", return_value=pd.DataFrame()):
+            with patch.object(engine, "get_recent_ohlcv", return_value=pd.DataFrame()):
                 strategy = MaVolumeStrategy(engine=engine, settings=settings)
                 result = strategy.run()
 

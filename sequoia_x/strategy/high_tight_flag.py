@@ -21,7 +21,14 @@ class HighTightFlagStrategy(BaseStrategy):
     """
 
     webhook_key: str = "flag"
-    _MIN_BARS: int = 40  # 至少需要 40 根 K 线
+    default_params = {
+        "lookback": 40,
+        "momentum": 1.6,
+        "flag_days": 10,
+        "flag_range": 1.15,
+        "hold_ratio": 0.8,
+        "shrink": 0.6,
+    }
 
     def run(self) -> list[str]:
         """
@@ -35,31 +42,28 @@ class HighTightFlagStrategy(BaseStrategy):
 
         for symbol in symbols:
             try:
-                df = self.engine.get_ohlcv(symbol)
-                if len(df) < self._MIN_BARS:
+                lookback = int(self.params["lookback"])
+                flag_days = int(self.params["flag_days"])
+                df = self.engine.get_recent_ohlcv(symbol, limit=lookback)
+                if len(df) < lookback:
                     continue
 
-                # 向量化计算各窗口指标
-                tail40 = df.tail(40)
-                tail10 = df.tail(10)
+                tail_long = df.tail(lookback)
+                tail_flag = df.tail(flag_days)
 
-                high40 = tail40["high"].max()
-                low40 = tail40["low"].min()
-                high10 = tail10["high"].max()
-                low10 = tail10["low"].min()
+                high_long = tail_long["high"].max()
+                low_long = tail_long["low"].min()
+                high_flag = tail_flag["high"].max()
+                low_flag = tail_flag["low"].min()
 
-                if low40 == 0 or low10 == 0:
+                if low_long == 0 or low_flag == 0:
                     continue
 
-                # 条件 1：强动量
-                momentum = high40 / low40 > 1.6
-                # 条件 2：极度收敛
-                consolidation = high10 / low10 < 1.15
-                # 条件 3：高位抗跌（近10天最低点不得低于40天最高点的80%）
-                high_level = low10 >= high40 * 0.8
-                # 条件 4：缩量（向量化均值）
+                momentum = high_long / low_long > float(self.params["momentum"])
+                consolidation = high_flag / low_flag < float(self.params["flag_range"])
+                high_level = low_flag >= high_long * float(self.params["hold_ratio"])
                 vol_ma20 = df["volume"].iloc[-21:-1].mean()
-                shrink = df["volume"].iloc[-1] < vol_ma20 * 0.6
+                shrink = df["volume"].iloc[-1] < vol_ma20 * float(self.params["shrink"])
 
                 if momentum and consolidation and high_level and shrink:
                     selected.append(symbol)

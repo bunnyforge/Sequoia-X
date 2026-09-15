@@ -41,15 +41,25 @@ class FeishuNotifier:
     def _get_stock_names(symbols: list[str]) -> dict[str, str]:
         """通过 baostock 批量查询股票名称，返回 {code: name} 映射。"""
         import baostock as bs
-        bs.login()
+
+        login_result = bs.login()
+        if login_result.error_code != "0":
+            logger.error(f"查询股票名称时 baostock 登录失败: {login_result.error_msg}")
+            return {}
+
         mapping = {}
-        for code in symbols:
-            prefix = "sh" if code.startswith(("6", "9")) else "sz"
-            rs = bs.query_stock_basic(code=f"{prefix}.{code}")
-            while rs.next():
-                row = rs.get_row_data()
-                mapping[code] = row[1]  # 第2个字段是股票名称
-        bs.logout()
+        try:
+            for code in symbols:
+                prefix = "sh" if code.startswith(("6", "9")) else "sz"
+                rs = bs.query_stock_basic(code=f"{prefix}.{code}")
+                while rs.next():
+                    row = rs.get_row_data()
+                    if len(row) > 1:
+                        mapping[code] = row[1]  # 第2个字段是股票名称
+        except Exception as exc:
+            logger.error(f"查询股票名称失败: {exc}")
+        finally:
+            bs.logout()
         return mapping
 
     def _build_card(self, symbols: list[str], strategy_name: str) -> dict:
@@ -136,5 +146,5 @@ class FeishuNotifier:
             else:
                 logger.info(f"飞书推送成功 [{webhook_key}]，共 {len(symbols)} 只股票")
 
-        except requests.RequestException as exc:
+        except (requests.RequestException, ValueError) as exc:
             logger.error(f"飞书推送请求异常 [{webhook_key}]：{exc}")

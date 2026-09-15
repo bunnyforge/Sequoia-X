@@ -1,8 +1,8 @@
 """策略基类模块：定义所有选股策略的抽象接口。"""
 
 from abc import ABC, abstractmethod
+from typing import Any
 
-from sequoia_x.core.config import Settings
 from sequoia_x.data.engine import DataEngine
 
 
@@ -18,17 +18,17 @@ class BaseStrategy(ABC):
     """
 
     webhook_key: str = "default"
+    default_params: dict = {}
 
-    def __init__(self, engine: DataEngine, settings: Settings) -> None:
-        """
-        初始化策略。
-
-        Args:
-            engine: DataEngine 实例，用于读取行情数据。
-            settings: Settings 实例，用于读取配置。
-        """
+    def __init__(
+        self,
+        engine: DataEngine,
+        settings: Any,
+        params: dict | None = None,
+    ) -> None:
         self.engine = engine
         self.settings = settings
+        self.params = {**self.default_params, **(params or {})}
 
     @abstractmethod
     def run(self) -> list[str]:

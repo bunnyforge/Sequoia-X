@@ -7,7 +7,7 @@
 ## 简介 | Introduction
 
 Sequoia-X V2 是面向 A 股市场的量化选股系统，基于现代 Python 工程化标准从零重构。
-系统以 OOP 架构、向量化计算和增量数据更新为核心设计原则，每日收盘后自动选股并推送至飞书群。
+系统以 OOP 架构、向量化计算和增量数据更新为核心设计原则，每日收盘后自动选股并在终端输出结果。
 
 数据层使用 [baostock](http://baostock.com)（免费、无需注册、无限流）拉取历史及增量日 K 数据（后复权），
 存储于本地 SQLite，彻底规避东方财富反爬问题。
@@ -17,7 +17,7 @@ Sequoia-X V2 是面向 A 股市场的量化选股系统，基于现代 Python �
 ## 两种运行模式
 
 ```bash
-python main.py               # 日常模式：8进程增量补数据 + 跑策略 + 飞书推送（2~3分钟）
+python main.py               # 日常模式：8进程增量补数据 + 跑策略 + 终端输出（2~3分钟）
 python main.py --backfill     # 回填模式：全市场历史K线一次性灌入（约12分钟）
 ```
 
@@ -56,7 +56,7 @@ pip install .
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填写飞书 Webhook URL
+# 如需启用飞书通知，再填写对应 Webhook URL
 ```
 
 ### 3. 首次回填历史数据
@@ -104,7 +104,7 @@ Sequoia-X/
 │   │   ├── uptrend_limit_down.py # 上升跌停策略
 │   │   └── rps_breakout.py      # RPS 突破策略
 │   └── notify/
-│       └── feishu.py            # 飞书 Webhook 推送
+│       └── feishu.py            # 飞书 Webhook 推送模块（可选）
 └── tests/                       # 属性测试（hypothesis）
 ```
 

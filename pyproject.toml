@@ -3,13 +3,14 @@ name = "sequoia-x"
 version = "2.0.0"
 requires-python = ">=3.10"
 dependencies = [
-    "akshare>=1.10",
     "baostock>=0.9",
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
     "rich>=13.0",
     "pandas>=2.0",
     "requests>=2.31",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
 ]
 
 [project.optional-dependencies]
