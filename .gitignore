@@ -20,6 +20,8 @@ ENV/
 data/*.db
 data/*.migrated
 data/sync_scheduler.json
+data/postgres/
+backups/
 
 # 前端依赖与构建
 node_modules/

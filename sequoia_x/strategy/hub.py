@@ -17,13 +17,10 @@ from sequoia_x.strategy.store import (
 
 class _LiteSettings:
     def __init__(self, db_path: str) -> None:
-        self.db_path = db_path
-        self.start_date = "2024-01-01"
-        self.feishu_webhook_url = ""
-        self.strategy_webhooks: dict[str, str] = {}
+        from sequoia_x.sync.store import load_config
 
-    def get_webhook_url(self, webhook_key: str) -> str:
-        return ""
+        self.db_path = db_path
+        self.start_date = load_config(db_path)["start_date"]
 
 
 def _utc_now() -> str:

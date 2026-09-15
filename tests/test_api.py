@@ -71,3 +71,18 @@ def test_dashboard_summary_empty_database(tmp_path: Path, monkeypatch) -> None:
     assert summary["synced_records"] == 0
     assert summary["latest_trade_date"] is None
     assert summary["trend"] == []
+
+
+def test_scheduler_seeds_and_ignores_start_date_env(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("START_DATE", "1999-01-01")
+
+    with TestClient(app) as client:
+        snap = client.get("/api/scheduler").json()
+        assert snap["config"]["start_date"] == "2024-01-01"
+        keys = [item["key"] for item in client.get("/api/strategies").json()["items"]]
+        assert "ma_volume" in keys
+        updated = client.put("/api/scheduler", json={"start_date": "2021-05-01"}).json()
+        assert updated["config"]["start_date"] == "2021-05-01"
+

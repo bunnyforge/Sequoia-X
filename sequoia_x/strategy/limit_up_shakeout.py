@@ -16,12 +16,8 @@ class LimitUpShakeoutStrategy(BaseStrategy):
     2. 今日收阴：今日 close < 今日 open
     3. 今日放量：今日 volume > 昨日 volume * 2.0
     4. 支撑不破：今日 low >= 昨日 close
-
-    Attributes:
-        webhook_key: 路由到 'shakeout' 专属飞书机器人。
     """
 
-    webhook_key: str = "shakeout"
     default_params = {"limit_up": 1.095, "volume_mult": 2.0}
 
     def run(self) -> list[str]:

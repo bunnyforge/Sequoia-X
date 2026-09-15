@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import os
-from sequoia_x.db import connect
+
+from sequoia_x.db import connect, resolve_dsn
 
 from sequoia_x.backtest.double_buy import DoubleBuyParams, DoubleBuyResult, run_double_buy
 
@@ -93,7 +93,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="二倍买入法回测：不猜底，跌一档加一倍。")
     parser.add_argument(
         "--db",
-        default=os.environ.get("DB_PATH", "data/sequoia_v2.db"),
+        default=resolve_dsn(),
         help="数据库路径或 DATABASE_URL",
     )
     parser.add_argument(

@@ -1,0 +1,29 @@
+# Internal Compose network only (Postgres is not published).
+# User/password here is bootstrap plumbing, not application config.
+services:
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sequoia
+      POSTGRES_USER: sequoia
+      POSTGRES_PASSWORD: sequoia
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sequoia -d sequoia"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    environment:
+      DATABASE_URL: postgresql://sequoia:sequoia@db:5432/sequoia
+    depends_on:
+      db:
+        condition: service_healthy

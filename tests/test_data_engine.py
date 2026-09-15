@@ -19,7 +19,6 @@ def make_engine_in(tmp_dir: str) -> tuple[DataEngine, Settings]:
     settings = Settings(
         db_path=str(Path(tmp_dir) / "test.db"),
         start_date="2024-01-01",
-        feishu_webhook_url="https://example.com/hook",
     )
     engine = DataEngine(settings)
     return engine, settings

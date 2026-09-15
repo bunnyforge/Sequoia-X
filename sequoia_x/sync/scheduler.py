@@ -1,4 +1,4 @@
-"""页面可配置的定时增量同步：间隔、失败重试、立即执行。配置与进度落 SQLite。"""
+"""页面可配置的定时增量同步：间隔、失败重试、立即执行。配置与进度落数据库。"""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from sequoia_x.sync.store import (
     load_config,
     load_jobs,
     load_progress,
-    migrate_json_config,
     save_config,
     save_job,
 )
@@ -41,7 +40,6 @@ class SyncScheduler:
     def __init__(
         self,
         db_path: str,
-        config_path: str | None = None,
         on_complete: Callable[[], None] | None = None,
     ) -> None:
         self.db_path = db_path
@@ -54,8 +52,6 @@ class SyncScheduler:
         self._workers: dict[str, threading.Thread] = {}
         self._pending: dict[str, dict] = {}
         self._last_persist: dict[str, float] = {}
-        if config_path:
-            migrate_json_config(db_path, config_path)
         self._config = load_config(db_path)
         stored = {item["key"]: item for item in load_jobs(db_path)}
         self._jobs: dict[str, dict] = {}

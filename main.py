@@ -7,8 +7,6 @@
 
 import argparse
 import sys
-from dotenv import load_dotenv
-load_dotenv()
 
 import socket
 socket.setdefaulttimeout(10.0)
@@ -53,7 +51,7 @@ def main() -> None:
             logger.info("Sequoia-X V2 回填模式运行完成")
             return
 
-        # ── 日常模式：单次 API 补今天 + 策略 + 推送 ──
+        # ── 日常模式：单次增量同步 + 策略 + 终端输出 ──
         logger.info("开始拉取最新快照...")
         count = engine.sync_today_bulk()
         logger.info(f"快照同步完成，写入 {count} 只股票")
@@ -68,7 +66,7 @@ def main() -> None:
             RpsBreakoutStrategy(engine=engine, settings=settings),
         ]
 
-        # 5. 遍历策略，暂不推送飞书，仅在终端打印结果
+        # 5. 遍历策略，在终端打印结果
         total_strategies = len(strategies)
         logger.info(f"开始执行 {total_strategies} 个策略")
         for index, strategy in enumerate(strategies, start=1):

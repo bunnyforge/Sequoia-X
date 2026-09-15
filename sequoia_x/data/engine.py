@@ -173,7 +173,10 @@ class DataEngine:
             conn.executemany(_UPSERT_DAILY_SQL, rows)
             conn.executemany(
                 _UPSERT_STATE_SQL,
-                [(symbol, last_date, first_date) for symbol, (last_date, first_date) in latest.items()],
+                [
+                    (symbol, last_date, first_date, None, None)
+                    for symbol, (last_date, first_date) in latest.items()
+                ],
             )
             conn.commit()
         return len(rows)

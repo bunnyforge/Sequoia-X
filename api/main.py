@@ -1,6 +1,5 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-import os
 
 from pathlib import Path
 
@@ -9,7 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from sequoia_x.core.config import bootstrap_app
+from sequoia_x.data.engine import DataEngine
 from sequoia_x.data.stats import collect_dashboard_stats, list_data_alerts
+from sequoia_x.db import resolve_dsn
 from sequoia_x.sync.scheduler import SyncScheduler
 from sequoia_x.strategy.hub import StrategyHub
 
@@ -21,8 +23,7 @@ strategy_hub: StrategyHub | None = None
 
 
 def get_db_path() -> str:
-    # Prefer Postgres DSN in cluster; fall back to local SQLite path.
-    return os.environ.get("DATABASE_URL") or os.environ.get("DB_PATH", "data/sequoia_v2.db")
+    return resolve_dsn()
 
 
 def invalidate_stats_cache() -> None:
@@ -36,18 +37,16 @@ def invalidate_stats_cache() -> None:
 async def lifespan(_app: FastAPI):
     global scheduler, strategy_hub
     db = get_db_path()
+    cfg = bootstrap_app(db)
     scheduler = SyncScheduler(
         db_path=db,
-        config_path=os.environ.get("SYNC_CONFIG_PATH", "data/sync_scheduler.json"),
         on_complete=invalidate_stats_cache,
     )
     strategy_hub = StrategyHub(db_path=db)
-    # Ensure stock_daily + sync state exist on empty Postgres.
-    from sequoia_x.data.engine import DataEngine
 
     class _BootSettings:
         db_path = db
-        start_date = os.environ.get("START_DATE", "2024-01-01")
+        start_date = cfg["start_date"]
 
     DataEngine(_BootSettings())  # type: ignore[arg-type]
     scheduler.start()

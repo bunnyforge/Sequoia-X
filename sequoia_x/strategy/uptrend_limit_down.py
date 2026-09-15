@@ -15,12 +15,8 @@ class UptrendLimitDownStrategy(BaseStrategy):
     1. 处于上升趋势：昨日20日均线 > 昨日60日均线
     2. 放量跌停：今日 close <= 昨日 close * 0.905
                 且今日 volume > 20日均量的 2.0 倍
-
-    Attributes:
-        webhook_key: 路由到 'limit_down' 专属飞书机器人。
     """
 
-    webhook_key: str = "limit_down"
     default_params = {"ma_fast": 20, "ma_slow": 60, "limit_down": 0.905, "volume_mult": 2.0}
 
     def run(self) -> list[str]:

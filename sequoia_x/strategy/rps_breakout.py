@@ -9,7 +9,6 @@ logger = get_logger(__name__)
 class RpsBreakoutStrategy(BaseStrategy):
     """RPS 极强动量突破策略"""
 
-    webhook_key: str = "rps"
     default_params = {"rps_period": 120, "rps_threshold": 90, "breakout": 0.90}
 
     def run(self) -> list[str]:

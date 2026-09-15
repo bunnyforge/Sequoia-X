@@ -10,14 +10,8 @@ class BaseStrategy(ABC):
     """选股策略抽象基类。
 
     所有具体策略必须继承此类并实现 run() 方法。
-
-    Attributes:
-        webhook_key: 策略对应的飞书 webhook 标识，用于路由到不同机器人。
-            默认为 'default'，将使用 Settings.feishu_webhook_url。
-            子类可覆盖此属性以路由到专属机器人，例如 'ma_volume'。
     """
 
-    webhook_key: str = "default"
     default_params: dict = {}
 
     def __init__(
