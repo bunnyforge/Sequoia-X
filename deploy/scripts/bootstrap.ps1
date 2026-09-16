@@ -1,4 +1,5 @@
 # One-shot: install Docker Desktop (if missing) and start Sequoia-X.
+# Tailscale hostname "cursor" / CN2 MagicDNS is Linux-only (see deploy/scripts/bootstrap.sh).
 param(
     [switch]$SkipInstall
 )
@@ -85,3 +86,4 @@ if (-not $ok) {
 
 Write-Step "Healthy: $url"
 Write-Host "Open http://127.0.0.1:8002/"
+Write-Host "Tailscale (Linux hostname 'cursor' / cursor.tail87959b.ts.net:8002 for CN2) is out of scope for this Windows script; see deploy/RUNBOOK.md."

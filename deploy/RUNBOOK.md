@@ -2,17 +2,17 @@
 
 Production path is **Docker Compose** (Postgres 16 + app).
 
-One-shot (installs Docker + Compose if needed, builds and starts):
+One-shot (installs Docker + Compose, and on Linux Tailscale, if needed, then builds and starts):
 
 ```bash
-# Linux
+# Linux (also joins Tailscale as hostname cursor when TS_AUTHKEY / TAILSCALE_AUTHKEY is set)
 ./install.sh
 
-# Windows (PowerShell, from the repo root)
+# Windows (PowerShell, from the repo root; Tailscale/CN2 join is Linux-only)
 powershell -ExecutionPolicy Bypass -File deploy\scripts\bootstrap.ps1
 ```
 
-Already have Docker and only want to start:
+Already have Docker (and Tailscale) and only want to start — `--skip-install` skips **all** host package installs (Docker and Tailscale), but still starts Compose and, if `tailscale` is on PATH, still sets hostname `cursor`:
 
 ```bash
 ./install.sh --skip-install
@@ -27,6 +27,7 @@ Data lives in **`/workspace/sequoia-x/postgres`** (bind-mounted to `/var/lib/pos
 - Docker Engine + Compose v2
 - About 2Gi RAM for both containers
 - Port `8002` free
+- Linux public access: Tailscale node named **`cursor`** (MagicDNS `cursor.tail87959b.ts.net`). CN2 nginx already proxies `http://185.218.4.107/` → `http://cursor.tail87959b.ts.net:8002`. Do **not** name the Tailscale machine `sequoia`.
 
 ---
 
@@ -45,11 +46,22 @@ Empty Postgres is OK: the API creates `stock_daily`, sync, and strategy tables o
 
 Web UI: `http://127.0.0.1:8002/`
 
-Optional Tailscale:
+Linux bootstrap installs Tailscale (unless `--skip-install`) and brings the node up as hostname **`cursor`**. It does **not** enable Tailscale Serve; CN2 nginx is the public front.
+
+Unattended join (reusable auth key from the Tailscale admin console, ideally tagged):
 
 ```bash
-sudo tailscale serve --bg 8002
+export TS_AUTHKEY='tskey-auth-…'   # or TAILSCALE_AUTHKEY
+./install.sh
 ```
+
+If no key is set and the node is not already logged in, bootstrap prints:
+
+```bash
+sudo tailscale up --hostname=cursor --accept-dns --ssh=false
+```
+
+and continues so Compose can still start locally. CN2 cannot reach the new machine until that login finishes.
 
 ---
 
@@ -92,7 +104,7 @@ docker compose up -d --build
 
 ## 5. Move to another computer
 
-Same Postgres **major** version (`postgres:16-bookworm`), same OS family (Linux↔Linux or WSL↔WSL). Stop Compose before copying. You do **not** copy a `.env` file.
+Same Postgres **major** version (`postgres:16-bookworm`), same OS family (Linux↔Linux or WSL↔WSL). Stop Compose before copying. You do **not** copy a `.env` file. Do **not** commit `TS_AUTHKEY` / `TAILSCALE_AUTHKEY`.
 
 On the old machine:
 
@@ -110,6 +122,37 @@ curl -sS http://127.0.0.1:8002/api/health
 ```
 
 Do not copy `/workspace/sequoia-x/postgres` while Postgres is running. After start, strategies, sync settings, and market data should already be there. A durable `/workspace` survives reboot; ephemeral disks still lose it.
+
+### Replace the Linux backend (same CN2 doorway)
+
+The public hostname is fixed: CN2 nginx proxies `http://185.218.4.107/` → `http://cursor.tail87959b.ts.net:8002`. A replacement machine must rejoin Tailscale as **`cursor`** so that config never changes.
+
+1. In Tailscale admin, create a **reusable** auth key (ideally tagged). Do not put the key in git.
+2. On the new host: clone the repo, copy Postgres data as above (or restore a dump).
+3. Join and start:
+
+```bash
+export TS_AUTHKEY='tskey-auth-…'   # or TAILSCALE_AUTHKEY
+./install.sh
+```
+
+4. If the old box is still online, delete or rename the previous **`cursor`** node in Tailscale admin so MagicDNS `cursor.tail87959b.ts.net` points at the new machine.
+5. Leave CN2 nginx unchanged.
+
+From the CN2 VPS (or any node on the tailnet):
+
+```bash
+tailscale ping cursor
+curl -sS http://cursor.tail87959b.ts.net:8002/api/health
+```
+
+Interactive fallback (no auth key): run `sudo tailscale up --hostname=cursor --accept-dns --ssh=false` when bootstrap prints that command.
+
+Optional Tailscale Serve is **not** used in this layout (CN2 is the public front). If you ever need it on a private tailnet only:
+
+```bash
+sudo tailscale serve --bg 8002
+```
 
 ---
 
