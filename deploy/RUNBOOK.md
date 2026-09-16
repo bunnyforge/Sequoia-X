@@ -2,7 +2,7 @@
 
 Production path is **Docker Compose** (Postgres 16 + app).
 
-One-shot (installs Docker + Compose, and on Linux Tailscale, if needed, then builds and starts):
+One-shot (installs Docker + Compose, and on Linux Tailscale, if needed, then builds and starts). **No script edits.** The only optional environment variable is `TS_AUTHKEY` (or `TAILSCALE_AUTHKEY`).
 
 ```bash
 # Linux (also joins Tailscale as hostname cursor when TS_AUTHKEY / TAILSCALE_AUTHKEY is set)
@@ -12,7 +12,9 @@ One-shot (installs Docker + Compose, and on Linux Tailscale, if needed, then bui
 powershell -ExecutionPolicy Bypass -File deploy\scripts\bootstrap.ps1
 ```
 
-Already have Docker (and Tailscale) and only want to start — `--skip-install` skips **all** host package installs (Docker and Tailscale), but still starts Compose and, if `tailscale` is on PATH, still sets hostname `cursor`:
+`--skip-install` skips **all** host package installs (Docker and Tailscale), but still starts Compose, still recovers a broken daemon/plugin on an already-provisioned host, and, if `tailscale` is on PATH, still sets hostname `cursor`.
+
+On Ubuntu+systemd, `get.docker.com` + `systemctl` is enough. On no-systemd / container-like hosts (PID 1 is not systemd; `systemctl start docker` is a no-op), bootstrap starts `dockerd --host=unix:///var/run/docker.sock` in the background (log: `/tmp/dockerd.log`) if `docker info` fails. If `docker compose version` still fails, it downloads the official Compose v2 CLI plugin (`docker-compose-linux-x86_64` / `docker-compose-linux-aarch64`, default `COMPOSE_VER=v2.29.7`) into `/usr/libexec/docker/cli-plugins` and `/usr/local/lib/docker/cli-plugins`.
 
 ```bash
 ./install.sh --skip-install
@@ -24,7 +26,7 @@ Data lives in **`/workspace/sequoia-x/postgres`** (bind-mounted to `/var/lib/pos
 
 ## 1. Requirements
 
-- Docker Engine + Compose v2
+- Docker Engine + Compose v2 (bootstrap installs them, and will start `dockerd` without systemd and fetch the Compose plugin if the package left them missing)
 - About 2Gi RAM for both containers
 - Port `8002` free
 - Linux public access: Tailscale node named **`cursor`** (MagicDNS `cursor.tail87959b.ts.net`). CN2 nginx already proxies `http://185.218.4.107/` → `http://cursor.tail87959b.ts.net:8002`. Do **not** name the Tailscale machine `sequoia`.

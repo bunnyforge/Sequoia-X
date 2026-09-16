@@ -20,7 +20,8 @@ for arg in "$@"; do
 Usage: $0 [--skip-install]
   Linux: install Docker/Compose and Tailscale if missing, then docker compose up --build.
   --skip-install  Skip all host installs (Docker and Tailscale packages). Still starts
-                  Compose. If Tailscale is already installed, still sets hostname ${TS_HOSTNAME}.
+                  Compose, and still recovers a missing dockerd / Compose plugin.
+                  If Tailscale is already installed, still sets hostname ${TS_HOSTNAME}.
 
   Tailscale machine name is always '${TS_HOSTNAME}' (MagicDNS ${TS_MAGICDNS}).
   Unattended join: export TS_AUTHKEY or TAILSCALE_AUTHKEY (reusable auth key from Tailscale admin).
@@ -54,12 +55,144 @@ docker_ok() {
   docker info >/dev/null 2>&1
 }
 
+docker_info_ok() {
+  docker_ok || as_root docker info >/dev/null 2>&1
+}
+
+compose_ok() {
+  docker compose version >/dev/null 2>&1 || as_root docker compose version >/dev/null 2>&1
+}
+
 dc() {
   if docker_ok; then
     docker compose "$@"
   else
     as_root docker compose "$@"
   fi
+}
+
+# GitHub Compose release assets: docker-compose-linux-x86_64 / docker-compose-linux-aarch64
+# (also armv6, armv7, ppc64le, riscv64, s390x). uname -m amd64/arm64 aliases included.
+compose_linux_arch() {
+  local m
+  m="$(uname -m)"
+  case "$m" in
+    x86_64|amd64)  printf 'x86_64' ;;
+    aarch64|arm64) printf 'aarch64' ;;
+    armv7l|armv7)  printf 'armv7' ;;
+    armv6l|armv6)  printf 'armv6' ;;
+    ppc64le)       printf 'ppc64le' ;;
+    riscv64)       printf 'riscv64' ;;
+    s390x)         printf 's390x' ;;
+    *) die "unsupported CPU architecture for Compose plugin: ${m}" ;;
+  esac
+}
+
+find_dockerd() {
+  if command -v dockerd >/dev/null 2>&1; then
+    command -v dockerd
+    return 0
+  fi
+  local p
+  for p in /usr/bin/dockerd /usr/sbin/dockerd /usr/local/bin/dockerd; do
+    if [[ -x "$p" ]]; then
+      printf '%s' "$p"
+      return 0
+    fi
+  done
+  p="$(as_root sh -c 'command -v dockerd' 2>/dev/null || true)"
+  if [[ -n "$p" ]]; then
+    printf '%s' "$p"
+    return 0
+  fi
+  return 1
+}
+
+dockerd_pid_exists() {
+  if command -v pgrep >/dev/null 2>&1; then
+    if pgrep -x dockerd >/dev/null 2>&1; then
+      return 0
+    fi
+    if as_root pgrep -x dockerd >/dev/null 2>&1; then
+      return 0
+    fi
+    return 1
+  fi
+  [[ -f /var/run/docker.pid ]]
+}
+
+# When systemd is absent (PID1=tini, systemctl no-ops), start dockerd ourselves.
+ensure_dockerd() {
+  if docker_info_ok; then
+    return 0
+  fi
+  log "Docker daemon not responding; trying to start it"
+  if command -v systemctl >/dev/null 2>&1; then
+    as_root systemctl enable --now docker >/dev/null 2>&1 || as_root systemctl start docker >/dev/null 2>&1 || true
+  fi
+  if docker_info_ok; then
+    return 0
+  fi
+  if command -v service >/dev/null 2>&1; then
+    as_root service docker start >/dev/null 2>&1 || true
+  fi
+  if docker_info_ok; then
+    return 0
+  fi
+
+  local bin logf
+  bin="$(find_dockerd || true)"
+  if [[ -z "$bin" ]]; then
+    log "dockerd binary not found (systemctl/service did not start Docker)"
+    return 1
+  fi
+  if dockerd_pid_exists && [[ -S /var/run/docker.sock ]]; then
+    log "dockerd already present; waiting for it to become ready"
+    return 0
+  fi
+  logf="${SEQUOIA_DOCKERD_LOG:-/tmp/dockerd.log}"
+  log "No working systemd Docker unit; starting ${bin} in background (log: ${logf})"
+  as_root sh -c "nohup '$bin' --host=unix:///var/run/docker.sock >>'$logf' 2>&1 </dev/null & exit 0" || true
+}
+
+# Official Compose v2 CLI plugin when the package/plugin is missing (common with Debian docker.io).
+ensure_compose_plugin() {
+  if compose_ok; then
+    return 0
+  fi
+  command -v docker >/dev/null 2>&1 || die "docker CLI is missing; install Docker or re-run without --skip-install"
+  need_root_for_install
+  ensure_curl
+
+  local arch ver url tmp dest installed magic
+  arch="$(compose_linux_arch)"
+  ver="${COMPOSE_VER:-v2.29.7}"
+  url="https://github.com/docker/compose/releases/download/${ver}/docker-compose-linux-${arch}"
+  log "docker compose plugin missing; downloading ${ver} (linux-${arch})"
+
+  tmp="$(mktemp)"
+  if ! curl -fsSL -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    die "failed to download Compose plugin from ${url}"
+  fi
+  magic="$(od -An -N4 -tx1 "$tmp" | tr -d ' \n')"
+  if [[ "$magic" != "7f454c46" ]]; then
+    rm -f "$tmp"
+    die "Compose download was not an ELF binary (got magic ${magic}); check ${url}"
+  fi
+
+  installed=0
+  for dest in /usr/libexec/docker/cli-plugins /usr/local/lib/docker/cli-plugins; do
+    if as_root mkdir -p "$dest" \
+      && as_root cp "$tmp" "${dest}/docker-compose" \
+      && as_root chmod 0755 "${dest}/docker-compose"; then
+      installed=1
+      log "Installed Compose plugin to ${dest}/docker-compose"
+    fi
+  done
+  rm -f "$tmp"
+  [[ "$installed" -eq 1 ]] || die "could not write Compose plugin to /usr/libexec/docker/cli-plugins or /usr/local/lib/docker/cli-plugins"
+  compose_ok || die "docker compose plugin still missing after install"
 }
 
 ensure_curl() {
@@ -76,30 +209,30 @@ ensure_curl() {
 }
 
 wait_docker() {
-  local i
+  local i logf
+  logf="${SEQUOIA_DOCKERD_LOG:-/tmp/dockerd.log}"
+  if docker_info_ok; then
+    return 0
+  fi
+  ensure_dockerd || true
   for i in $(seq 1 60); do
-    if docker_ok || as_root docker info >/dev/null 2>&1; then
+    if docker_info_ok; then
       return 0
     fi
     sleep 2
   done
-  die "Docker daemon did not become ready. Start Docker and re-run: $0 --skip-install"
+  die "Docker daemon did not become ready (no-systemd hosts: see ${logf} if dockerd was started in the background). Start Docker and re-run: $0 --skip-install"
 }
 
 install_docker_linux() {
-  if command -v docker >/dev/null 2>&1 && as_root docker compose version >/dev/null 2>&1; then
-    log "Docker Compose already installed"
+  if command -v docker >/dev/null 2>&1; then
+    log "Docker CLI already installed"
     return 0
   fi
   need_root_for_install
   ensure_curl
   log "Installing Docker Engine + Compose plugin (get.docker.com)"
   curl -fsSL https://get.docker.com | as_root sh
-  if command -v systemctl >/dev/null 2>&1; then
-    as_root systemctl enable --now docker >/dev/null 2>&1 || as_root systemctl start docker >/dev/null 2>&1 || true
-  elif command -v service >/dev/null 2>&1; then
-    as_root service docker start >/dev/null 2>&1 || true
-  fi
   if [[ "$(id -u)" -ne 0 ]] && command -v usermod >/dev/null 2>&1; then
     as_root usermod -aG docker "$USER" || true
     log "Added $USER to docker group (log out/in later so docker works without sudo)"
@@ -223,7 +356,11 @@ case "$(uname -s)" in
 esac
 
 wait_docker
-as_root docker compose version >/dev/null 2>&1 || docker compose version >/dev/null 2>&1 || die "docker compose plugin missing"
+if [[ "$(uname -s)" == Linux ]]; then
+  ensure_compose_plugin
+else
+  compose_ok || die "docker compose plugin missing"
+fi
 
 SEQUOIA_PGDATA="${SEQUOIA_PGDATA:-/workspace/sequoia-x/postgres}"
 export SEQUOIA_PGDATA
