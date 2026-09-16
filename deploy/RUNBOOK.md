@@ -1,8 +1,8 @@
-# Sequoia-X — Docker Compose deploy
+# Sequoia-X — local SQLite (optional Docker Compose)
 
-Production path is **Docker Compose** (Postgres 16 + app).
+Default path is **local Python** writing **`data/sequoia_v2.db`**. Compose is optional: one `app` container, SQLite on a bind mount.
 
-One-shot (installs Docker + Compose, and on Linux Tailscale, if needed, then builds and starts). **No script edits.** The only optional environment variable is `TS_AUTHKEY` (or `TAILSCALE_AUTHKEY`).
+One-shot Docker (installs Docker + Compose, and on Linux Tailscale, if needed, then builds and starts). **No script edits.** The only optional environment variable is `TS_AUTHKEY` (or `TAILSCALE_AUTHKEY`).
 
 ```bash
 # Linux (also joins Tailscale as hostname cursor when TS_AUTHKEY / TAILSCALE_AUTHKEY is set)
@@ -20,31 +20,38 @@ On Ubuntu+systemd, `get.docker.com` + `systemctl` is enough. On no-systemd / con
 ./install.sh --skip-install
 ```
 
-Data lives in **`/workspace/sequoia-x/postgres`** (bind-mounted to `/var/lib/postgresql/data`). Install/bootstrap scripts create that directory if missing. It is outside the git repo.
+SQLite lives in **`./data`** (override with `SEQUOIA_DATA`). Install/bootstrap scripts create that directory if missing.
+
+Without Docker:
+
+```bash
+uv sync
+./scripts/run-web.sh
+# or: python main.py --backfill
+```
 
 ---
 
 ## 1. Requirements
 
-- Docker Engine + Compose v2 (bootstrap installs them, and will start `dockerd` without systemd and fetch the Compose plugin if the package left them missing)
-- About 2Gi RAM for both containers
-- Port `8002` free
+- Python >= 3.10 for local runs; Docker Engine + Compose v2 if you use `./install.sh`
+- Port `8002` free for the web UI
 - Linux public access: Tailscale node named **`cursor`** (MagicDNS `cursor.tail87959b.ts.net`). CN2 nginx already proxies `http://185.218.4.107/` → `http://cursor.tail87959b.ts.net:8002`. Do **not** name the Tailscale machine `sequoia`.
 
 ---
 
-## 2. First start
+## 2. First start (Compose)
 
 ```bash
 git clone https://github.com/bunnyforge/Sequoia-X.git
 cd Sequoia-X
-mkdir -p /workspace/sequoia-x/postgres   # created automatically by ./install.sh
+mkdir -p data   # created automatically by ./install.sh
 docker compose up -d --build
 docker compose ps
 curl -sS http://127.0.0.1:8002/api/health
 ```
 
-Empty Postgres is OK: the API creates `stock_daily`, sync, and strategy tables on boot, and seeds default sync/strategy rows (`start_date=2024-01-01`, strategies off). No `.env` file is required.
+An empty `data/` directory is OK: the API creates `stock_daily`, sync, and strategy tables on boot, and seeds default sync/strategy rows (`start_date=2024-01-01`, strategies off). No `.env` file is required.
 
 Web UI: `http://127.0.0.1:8002/`
 
@@ -71,19 +78,17 @@ and continues so Compose can still start locally. CN2 cannot reach the new machi
 
 | Path | Role |
 |------|------|
-| `docker-compose.yml` | `db` (postgres:16-bookworm) + `app` |
-| `/workspace/sequoia-x/postgres` | Postgres data directory (copy this to migrate machines) |
+| `docker-compose.yml` | `app` only; SQLite via `./data` |
+| `./data/sequoia_v2.db` | SQLite file (copy this to migrate machines) |
 | `Dockerfile` | frontend build + Python API |
 
-`DATABASE_URL` inside the app container:
+`DB_PATH` inside the app container:
 
 ```
-postgresql://sequoia:sequoia@db:5432/sequoia
+data/sequoia_v2.db
 ```
 
-Postgres is not published on the host. The user/password in `docker-compose.yml` (`sequoia`/`sequoia`) is **internal Compose plumbing** so Postgres can start; it is not application config and is not stored as the only copy inside the database.
-
-Product settings (strategies, sync interval/retries, `start_date`, run history) live in Postgres and the Web UI. Port `8002` is the process bind in Compose/Dockerfile.
+Product settings (strategies, sync interval/retries, `start_date`, run history) live in the same SQLite file as market data. Port `8002` is the process bind in Compose/Dockerfile.
 
 ---
 
@@ -92,8 +97,7 @@ Product settings (strategies, sync interval/retries, `start_date`, run history) 
 ```bash
 docker compose logs -f app
 docker compose restart app
-docker compose down          # stop; keep /workspace/sequoia-x/postgres
-docker compose down -v       # do not use — there is no named volume; data is the bind mount
+docker compose down          # stop; keep ./data
 ```
 
 Rebuild after code changes:
@@ -106,31 +110,31 @@ docker compose up -d --build
 
 ## 5. Move to another computer
 
-Same Postgres **major** version (`postgres:16-bookworm`), same OS family (Linux↔Linux or WSL↔WSL). Stop Compose before copying. You do **not** copy a `.env` file. Do **not** commit `TS_AUTHKEY` / `TAILSCALE_AUTHKEY`.
+Stop writers, then copy the SQLite file. You do **not** copy a `.env` file. Do **not** commit `TS_AUTHKEY` / `TAILSCALE_AUTHKEY`.
 
 On the old machine:
 
 ```bash
-docker compose stop
-# copy the actual pgdata dir (not only the git repo)
-# example: rsync -aH --numeric-ids /workspace/sequoia-x/postgres/ other:/workspace/sequoia-x/postgres/
+docker compose stop   # if using Compose
+./deploy/scripts/backup-db.sh
+# or copy data/sequoia_v2.db (and -wal/-shm if present)
 ```
 
-On the new machine (same `docker-compose.yml` in the repo):
+On the new machine:
 
 ```bash
-docker compose up -d --build
+mkdir -p data
+cp backups/sequoia-YYYYMMDD-HHMMSS.db data/sequoia_v2.db
+docker compose up -d --build   # or ./scripts/run-web.sh
 curl -sS http://127.0.0.1:8002/api/health
 ```
-
-Do not copy `/workspace/sequoia-x/postgres` while Postgres is running. After start, strategies, sync settings, and market data should already be there. A durable `/workspace` survives reboot; ephemeral disks still lose it.
 
 ### Replace the Linux backend (same CN2 doorway)
 
 The public hostname is fixed: CN2 nginx proxies `http://185.218.4.107/` → `http://cursor.tail87959b.ts.net:8002`. A replacement machine must rejoin Tailscale as **`cursor`** so that config never changes.
 
 1. In Tailscale admin, create a **reusable** auth key (ideally tagged). Do not put the key in git.
-2. On the new host: clone the repo, copy Postgres data as above (or restore a dump).
+2. On the new host: clone the repo, copy `data/sequoia_v2.db` as above (or restore a backup).
 3. Join and start:
 
 ```bash
@@ -158,32 +162,32 @@ sudo tailscale serve --bg 8002
 
 ---
 
-## 6. Logical backup (optional)
+## 6. Backup
 
 ```bash
 ./deploy/scripts/backup-db.sh
-# writes backups/sequoia-YYYYMMDD-HHMMSS.sql.gz
+# writes backups/sequoia-YYYYMMDD-HHMMSS.db  (sqlite3 .backup, WAL-safe)
 ```
 
-Restore into a **running** stack (replaces objects in db `sequoia`):
+Restore (stop the app first so nothing is writing):
 
 ```bash
-./deploy/scripts/restore-db.sh backups/sequoia-YYYYMMDD-HHMMSS.sql.gz
-docker compose restart app
+docker compose stop app   # if using Compose
+./deploy/scripts/restore-db.sh backups/sequoia-YYYYMMDD-HHMMSS.db
+docker compose start app  # or ./scripts/run-web.sh
 ```
 
-The dump includes market data **and** product config (`sync_config`, `strategy_config`, run history). Use this instead of copying `/workspace/sequoia-x/postgres` when you cannot copy the data directory.
+The file includes market data **and** product config (`sync_config`, `strategy_config`, run history).
 
 ---
 
 ## 7. Check
 
 ```bash
-docker compose exec app python -c "
-from sequoia_x.db import connect, table_exists
-import os
-with connect(os.environ['DATABASE_URL']) as conn:
-    print('postgres', conn.postgres)
+python -c "
+from sequoia_x.db import connect, table_exists, resolve_db_path
+print(resolve_db_path())
+with connect() as conn:
     for t in ['stock_daily', 'sync_config', 'strategy_config']:
         print(t, table_exists(conn, t))
 "

@@ -1,4 +1,4 @@
-"""配置：连接走 DATABASE_URL/DB_PATH，业务项（如 start_date）走数据库。"""
+"""配置：连接走 DB_PATH，业务项（如 start_date）走数据库。"""
 
 from pathlib import Path
 
@@ -7,7 +7,7 @@ from hypothesis import settings as h_settings
 from hypothesis import strategies as st
 
 from sequoia_x.core.config import Settings, get_settings, reset_settings
-from sequoia_x.db import resolve_dsn
+from sequoia_x.db import resolve_db_path
 from sequoia_x.sync.store import load_config, migrate_json_config, save_config
 
 
@@ -23,16 +23,9 @@ from sequoia_x.sync.store import load_config, migrate_json_config, save_config
 )
 @h_settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_db_path_env_overrides_default(db_path: str, monkeypatch) -> None:
-    """DB_PATH 决定 SQLite 路径；DATABASE_URL 未设置时生效。"""
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    """DB_PATH 决定 SQLite 路径。"""
     monkeypatch.setenv("DB_PATH", db_path)
-    assert resolve_dsn() == db_path
-
-
-def test_database_url_wins_over_db_path(monkeypatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://sequoia:sequoia@db:5432/sequoia")
-    monkeypatch.setenv("DB_PATH", "ignored.db")
-    assert resolve_dsn() == "postgresql://sequoia:sequoia@db:5432/sequoia"
+    assert resolve_db_path() == db_path
 
 
 def test_settings_defaults_without_env_file() -> None:
@@ -43,7 +36,6 @@ def test_settings_defaults_without_env_file() -> None:
 
 def test_get_settings_reads_start_date_from_db(tmp_path: Path, monkeypatch) -> None:
     db_path = str(tmp_path / "cfg.db")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("DB_PATH", db_path)
     reset_settings()
     save_config(db_path, {"start_date": "2020-06-01", "enabled": False})
@@ -55,7 +47,6 @@ def test_get_settings_reads_start_date_from_db(tmp_path: Path, monkeypatch) -> N
 
 def test_empty_db_seeds_default_start_date(tmp_path: Path, monkeypatch) -> None:
     db_path = str(tmp_path / "empty.db")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("DB_PATH", db_path)
     reset_settings()
     s = get_settings()

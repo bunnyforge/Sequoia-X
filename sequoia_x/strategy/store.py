@@ -1,4 +1,4 @@
-"""策略开关和参数落在数据库（Postgres 或 SQLite）。"""
+"""策略开关和参数落在 SQLite。"""
 
 from __future__ import annotations
 

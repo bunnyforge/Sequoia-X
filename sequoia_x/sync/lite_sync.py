@@ -72,8 +72,6 @@ def ensure_sync_state(db_path: str) -> None:
     """维护每只股票的首尾日期，避免每次扫描全部日 K。"""
     ensure_parent_dir(db_path)
     with connect(db_path) as conn:
-        if not conn.postgres:
-            conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(_CREATE_STATE_SQL)
         columns = column_names(conn, "stock_sync_state")
         if "first_date" not in columns:

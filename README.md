@@ -10,7 +10,7 @@ Sequoia-X V2 是面向 A 股市场的量化选股系统，基于现代 Python �
 系统以 OOP 架构、向量化计算和增量数据更新为核心设计原则，每日收盘后自动选股并在终端输出结果。
 
 数据层使用 [baostock](http://baostock.com)（免费、无需注册、无限流）拉取历史及增量日 K 数据（后复权）。
-部署默认写入 Postgres；本地开发仍可回退到 SQLite。
+行情与业务配置都存在本地 SQLite（默认 `data/sequoia_v2.db`）。
 
 ---
 
@@ -36,22 +36,7 @@ python main.py --backfill     # 回填模式：全市场历史K线一次性灌�
 
 ---
 
-## 部署 | Docker Compose
-
-生产部署用 Compose（Postgres 16 + Web），**不需要 `.env`**。一键脚本会安装 Docker/Compose（如缺少）并启动。策略、同步间隔、起始日期等业务配置都在 Postgres / 网页里，换机器只拷库即可。细节见 `deploy/RUNBOOK.md`。
-
-```bash
-# Linux
-./install.sh
-
-# Windows
-powershell -ExecutionPolicy Bypass -File deploy\scripts\bootstrap.ps1
-# http://127.0.0.1:8002/
-```
-
-换机器：先 `docker compose stop`，再拷贝 **`/workspace/sequoia-x/postgres`**（Postgres 必须先停再拷；该目录由安装脚本自动创建），新机器上同样放到 `/workspace/sequoia-x/postgres` 后 `docker compose up -d --build`。等价做法是 `pg_dump` / `restore-db.sh`。
-
-## 本地开发 | Quick Start
+## 本地运行 | Quick Start
 
 ### 环境要求
 
@@ -69,7 +54,7 @@ pip install .
 
 ### 2. 首次回填历史数据
 
-未设置 `DATABASE_URL` 时写入本地 SQLite；Compose 环境里 `python main.py` 会连同一套 Postgres。业务起始日期从库里的同步配置读取，不读 `.env`。
+数据写入 `data/sequoia_v2.db`（可用环境变量 `DB_PATH` 改路径）。业务起始日期从库里的同步配置读取。
 
 ```bash
 python main.py --backfill
@@ -83,10 +68,34 @@ python main.py --backfill
 python main.py
 ```
 
+网页控制台：
+
+```bash
+./scripts/run-web.sh
+# http://127.0.0.1:8002/
+```
+
 建议配合 crontab 每个交易日收盘后自动执行：
 
 ```cron
 15 19 * * 1-5 cd /root/Sequoia-X && .venv/bin/python main.py >> log.txt 2>&1
+```
+
+换机器：拷贝 `data/sequoia_v2.db`（若开了 WAL，一并拷 `*.db-wal` / `*.db-shm`，或用 `./deploy/scripts/backup-db.sh` 打一份一致备份）。
+
+---
+
+## 可选：Docker Compose
+
+仍可用单容器跑 Web（SQLite 挂在 `./data`）。细节见 `deploy/RUNBOOK.md`。
+
+```bash
+# Linux
+./install.sh
+
+# Windows
+powershell -ExecutionPolicy Bypass -File deploy\scripts\bootstrap.ps1
+# http://127.0.0.1:8002/
 ```
 
 ---
@@ -97,13 +106,13 @@ python main.py
 Sequoia-X/
 ├── main.py                      # 入口：argparse 分发日常/回填模式
 ├── pyproject.toml               # 依赖声明 + ruff/pytest 配置
-├── docker-compose.yml           # 生产部署：Postgres + Web
+├── docker-compose.yml           # 可选：单容器 Web + 本地 SQLite 卷
 ├── Dockerfile                   # 前端构建 + API 镜像
-├── data/                        # 本地 SQLite 等（不入 git）；Compose Postgres 在 /workspace/sequoia-x/postgres
+├── data/                        # 本地 SQLite（不入 git）
 
 ├── sequoia_x/
 │   ├── core/
-│   │   ├── config.py            # 连接 DSN + 从数据库读业务配置
+│   │   ├── config.py            # SQLite 路径 + 从数据库读业务配置
 │   │   └── logger.py            # rich 结构化日志
 │   ├── data/
 │   │   └── engine.py            # 数据引擎（baostock 回填 + 增量同步 + SQLite）
@@ -124,7 +133,7 @@ Sequoia-X/
 
 - **数据源**：[baostock](http://baostock.com)（免费、无需注册、无限流）
 - **复权方式**：后复权（hfq）— 历史价格不变，适合增量存储，避免除权导致数据错乱
-- **存储**：Docker Compose 使用 Postgres（宿主机 **`/workspace/sequoia-x/postgres`**，脚本会自动 `mkdir`）；业务配置与行情同库，拷该目录即可迁机。本地 `python main.py` 在未设置 `DATABASE_URL` 时回退 SQLite（`data/sequoia_v2.db`）
+- **存储**：SQLite，默认 `data/sequoia_v2.db`；行情与策略/同步配置同库
 - **日常增量**：8 进程并行通过 baostock 拉取，2~3 分钟完成全市场更新
 
 ---

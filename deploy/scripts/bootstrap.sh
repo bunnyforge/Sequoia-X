@@ -362,15 +362,10 @@ else
   compose_ok || die "docker compose plugin missing"
 fi
 
-SEQUOIA_PGDATA="${SEQUOIA_PGDATA:-/workspace/sequoia-x/postgres}"
-export SEQUOIA_PGDATA
-if mkdir -p "$SEQUOIA_PGDATA" 2>/dev/null; then
-  :
-else
-  as_root mkdir -p "$SEQUOIA_PGDATA" || die "could not create $SEQUOIA_PGDATA"
-  as_root chmod a+rwx /workspace /workspace/sequoia-x "$SEQUOIA_PGDATA" 2>/dev/null || true
-fi
-log "Postgres data directory: $SEQUOIA_PGDATA"
+SEQUOIA_DATA="${SEQUOIA_DATA:-$ROOT/data}"
+export SEQUOIA_DATA
+mkdir -p "$SEQUOIA_DATA" || die "could not create $SEQUOIA_DATA"
+log "SQLite data directory: $SEQUOIA_DATA"
 
 log "Building and starting containers (first run downloads images; can take several minutes)"
 dc up -d --build

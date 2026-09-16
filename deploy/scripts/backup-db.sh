@@ -2,7 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 mkdir -p backups
+src="${DB_PATH:-data/sequoia_v2.db}"
+[[ -f "$src" ]] || { echo "no SQLite file at $src" >&2; exit 1; }
 stamp="$(date +%Y%m%d-%H%M%S)"
-out="backups/sequoia-${stamp}.sql.gz"
-docker compose exec -T db pg_dump -U sequoia --no-owner --no-acl sequoia | gzip > "$out"
+out="backups/sequoia-${stamp}.db"
+sqlite3 "$src" ".backup '$out'"
 echo "wrote $out"
