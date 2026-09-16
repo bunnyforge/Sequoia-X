@@ -59,12 +59,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
+        "http://127.0.0.1:5173",
         "http://localhost:8002",
         "http://127.0.0.1:8002",
-        "https://cursor.tail87959b.ts.net",
-        "http://100.76.76.54",
     ],
-    allow_origin_regex=r"https://.*\.ts\.net",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

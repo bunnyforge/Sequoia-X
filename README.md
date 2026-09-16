@@ -78,25 +78,10 @@ python main.py
 建议配合 crontab 每个交易日收盘后自动执行：
 
 ```cron
-15 19 * * 1-5 cd /root/Sequoia-X && .venv/bin/python main.py >> log.txt 2>&1
+15 19 * * 1-5 cd /path/to/Sequoia-X && .venv/bin/python main.py >> log.txt 2>&1
 ```
 
-换机器：拷贝 `data/sequoia_v2.db`（若开了 WAL，一并拷 `*.db-wal` / `*.db-shm`，或用 `./deploy/scripts/backup-db.sh` 打一份一致备份）。
-
----
-
-## 可选：Docker Compose
-
-仍可用单容器跑 Web（SQLite 挂在 `./data`）。细节见 `deploy/RUNBOOK.md`。
-
-```bash
-# Linux
-./install.sh
-
-# Windows
-powershell -ExecutionPolicy Bypass -File deploy\scripts\bootstrap.ps1
-# http://127.0.0.1:8002/
-```
+备份：停掉正在写库的进程后，拷贝 `data/sequoia_v2.db`（若存在 `*.db-wal` / `*.db-shm` 一并拷走）。
 
 ---
 
@@ -106,8 +91,7 @@ powershell -ExecutionPolicy Bypass -File deploy\scripts\bootstrap.ps1
 Sequoia-X/
 ├── main.py                      # 入口：argparse 分发日常/回填模式
 ├── pyproject.toml               # 依赖声明 + ruff/pytest 配置
-├── docker-compose.yml           # 可选：单容器 Web + 本地 SQLite 卷
-├── Dockerfile                   # 前端构建 + API 镜像
+├── scripts/run-web.sh           # 本机启动网页 API（:8002）
 ├── data/                        # 本地 SQLite（不入 git）
 
 ├── sequoia_x/
