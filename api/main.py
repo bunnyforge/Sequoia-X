@@ -104,6 +104,8 @@ class SchedulerConfigIn(BaseModel):
     interval_seconds: int | None = Field(default=None, ge=10, le=86400)
     retry_seconds: int | None = Field(default=None, ge=5, le=3600)
     max_retries: int | None = Field(default=None, ge=0, le=20)
+    concurrency: int | None = Field(default=None, ge=1, le=32)
+    sleep_seconds: int | None = Field(default=None, ge=0, le=60)
     start_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 

@@ -172,11 +172,15 @@ class DataEngine:
     def sync_today_bulk(self) -> int:
         """先同步股票池，再按缺口增量补日 K。"""
         from sequoia_x.sync.lite_sync import run_market_sync
+        from sequoia_x.sync.store import load_config
 
+        cfg = load_config(self.db_path)
         result = run_market_sync(
             self.db_path,
             mode="incremental",
             start_date=self.start_date,
+            concurrency=int(cfg.get("concurrency") or 8),
+            sleep_seconds=int(cfg.get("sleep_seconds") or 0),
         )
         logger.info(result.get("message") or "增量同步完成")
         return int(result.get("written") or 0)

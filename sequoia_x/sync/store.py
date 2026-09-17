@@ -14,12 +14,20 @@ MAX_INTERVAL_SECONDS = 86400
 MIN_RETRY_SECONDS = 5
 MAX_RETRY_SECONDS = 3600
 MAX_RETRY_COUNT = 20
+MIN_CONCURRENCY = 1
+MAX_CONCURRENCY = 32
+DEFAULT_CONCURRENCY = 8
+MIN_SLEEP_SECONDS = 0
+MAX_SLEEP_SECONDS = 60
+DEFAULT_SLEEP_SECONDS = 0
 
 
 def clamp_config(raw: dict) -> dict:
     interval = int(raw.get("interval_seconds", 300))
     retry = int(raw.get("retry_seconds", 30))
     max_retries = int(raw.get("max_retries", 3))
+    concurrency = int(raw.get("concurrency", DEFAULT_CONCURRENCY))
+    sleep_seconds = int(raw.get("sleep_seconds", DEFAULT_SLEEP_SECONDS))
     start_date = str(raw.get("start_date") or "2024-01-01").strip()
     try:
         parsed = date.fromisoformat(start_date)
@@ -32,6 +40,8 @@ def clamp_config(raw: dict) -> dict:
         "interval_seconds": max(MIN_INTERVAL_SECONDS, min(MAX_INTERVAL_SECONDS, interval)),
         "retry_seconds": max(MIN_RETRY_SECONDS, min(MAX_RETRY_SECONDS, retry)),
         "max_retries": max(0, min(MAX_RETRY_COUNT, max_retries)),
+        "concurrency": max(MIN_CONCURRENCY, min(MAX_CONCURRENCY, concurrency)),
+        "sleep_seconds": max(MIN_SLEEP_SECONDS, min(MAX_SLEEP_SECONDS, sleep_seconds)),
         "start_date": parsed.strftime("%Y-%m-%d"),
     }
 
@@ -79,10 +89,13 @@ def ensure_control_tables(db_path: str) -> None:
                 retry_seconds INTEGER NOT NULL DEFAULT 30,
                 max_retries INTEGER NOT NULL DEFAULT 3,
                 start_date TEXT NOT NULL DEFAULT '2024-01-01',
+                concurrency INTEGER NOT NULL DEFAULT 8,
+                sleep_seconds INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT
             )
             """
         )
+        _ensure_sync_config_columns(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS sync_progress (
@@ -164,6 +177,18 @@ def ensure_control_tables(db_path: str) -> None:
         )
 
 
+def _ensure_sync_config_columns(conn) -> None:
+    columns = column_names(conn, "sync_config")
+    if "concurrency" not in columns:
+        conn.execute(
+            "ALTER TABLE sync_config ADD COLUMN concurrency INTEGER NOT NULL DEFAULT 8"
+        )
+    if "sleep_seconds" not in columns:
+        conn.execute(
+            "ALTER TABLE sync_config ADD COLUMN sleep_seconds INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 def migrate_json_config(db_path: str, config_path: str) -> None:
     path = Path(config_path)
     if not path.exists():
@@ -185,7 +210,8 @@ def load_config(db_path: str) -> dict:
     with connect(db_path) as conn:
         row = conn.execute(
             """
-            SELECT enabled, interval_seconds, retry_seconds, max_retries, start_date
+            SELECT enabled, interval_seconds, retry_seconds, max_retries, start_date,
+                   concurrency, sleep_seconds
             FROM sync_config WHERE id = 1
             """
         ).fetchone()
@@ -198,6 +224,8 @@ def load_config(db_path: str) -> dict:
             "retry_seconds": row[2],
             "max_retries": row[3],
             "start_date": row[4],
+            "concurrency": row[5],
+            "sleep_seconds": row[6],
         }
     )
 
@@ -209,14 +237,17 @@ def save_config(db_path: str, config: dict) -> None:
         conn.execute(
             """
             INSERT INTO sync_config (
-                id, enabled, interval_seconds, retry_seconds, max_retries, start_date, updated_at
-            ) VALUES (1, ?, ?, ?, ?, ?, ?)
+                id, enabled, interval_seconds, retry_seconds, max_retries, start_date,
+                concurrency, sleep_seconds, updated_at
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 enabled = excluded.enabled,
                 interval_seconds = excluded.interval_seconds,
                 retry_seconds = excluded.retry_seconds,
                 max_retries = excluded.max_retries,
                 start_date = excluded.start_date,
+                concurrency = excluded.concurrency,
+                sleep_seconds = excluded.sleep_seconds,
                 updated_at = excluded.updated_at
             """,
             (
@@ -225,6 +256,8 @@ def save_config(db_path: str, config: dict) -> None:
                 cfg["retry_seconds"],
                 cfg["max_retries"],
                 cfg["start_date"],
+                cfg["concurrency"],
+                cfg["sleep_seconds"],
                 _now(),
             ),
         )

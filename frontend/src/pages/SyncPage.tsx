@@ -95,6 +95,8 @@ export default function SyncPage() {
             interval_seconds: 300,
             retry_seconds: 30,
             max_retries: 3,
+            concurrency: 8,
+            sleep_seconds: 0,
             start_date: "2024-01-01",
           }}
           onFinish={(values) => saveMutation.mutate(values)}
@@ -131,6 +133,20 @@ export default function SyncPage() {
             rules={[{ required: true, message: "请填写重试次数" }]}
           >
             <InputNumber min={0} max={20} style={{ width: 240 }} />
+          </Form.Item>
+          <Form.Item
+            name="concurrency"
+            label="并发请求数"
+            rules={[{ required: true, message: "请填写并发数" }]}
+          >
+            <InputNumber min={1} max={32} style={{ width: 240 }} />
+          </Form.Item>
+          <Form.Item
+            name="sleep_seconds"
+            label="请求完成后休眠"
+            rules={[{ required: true, message: "请填写休眠秒数" }]}
+          >
+            <InputNumber min={0} max={60} style={{ width: 240 }} addonAfter="秒" />
           </Form.Item>
           <Space wrap>
             <Button type="primary" htmlType="submit" loading={saveMutation.isPending}>

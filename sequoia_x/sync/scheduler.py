@@ -248,6 +248,8 @@ class SyncScheduler:
                         key, current, total, symbol
                     ),
                     on_status=lambda message, key=job_key: self._on_status(key, message),
+                    concurrency=int(config.get("concurrency") or 8),
+                    sleep_seconds=int(config.get("sleep_seconds") or 0),
                 )
                 failed = result.get("failed") or []
                 message = result.get("message") or "同步完成"
