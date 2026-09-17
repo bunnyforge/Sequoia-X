@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from typing import Callable
@@ -454,6 +455,7 @@ def _sync_one(
     start: str,
     end: str,
     trading_days: list[str],
+    sleep_seconds: int = 0,
 ) -> tuple[str, int, str | None]:
     try:
         raw = _fetch_symbol(symbol, start, end)
@@ -486,6 +488,9 @@ def _sync_one(
             failed_reason=reason,
         )
         return symbol, 0, reason
+    finally:
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
 
 
 def _resolve_target(db_path: str) -> str:
@@ -502,19 +507,23 @@ def _run_tasks(
     tasks: list[tuple[str, str, str]],
     trading_days: list[str],
     on_progress: Callable[[int, int, str], None] | None,
+    concurrency: int = 8,
+    sleep_seconds: int = 0,
 ) -> tuple[int, list[dict]]:
     written = 0
     failed: list[dict] = []
     if not tasks:
         return written, failed
-    workers = min(8, len(tasks))
+    workers = max(1, min(int(concurrency), len(tasks)))
     completed = 0
     if on_progress:
         on_progress(0, len(tasks), "")
     try:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
-                pool.submit(_sync_one, db_path, symbol, start, end, trading_days): symbol
+                pool.submit(
+                    _sync_one, db_path, symbol, start, end, trading_days, sleep_seconds
+                ): symbol
                 for symbol, start, end in tasks
             }
             for future in as_completed(futures):
@@ -536,6 +545,8 @@ def run_market_sync(
     start_date: str = "2024-01-01",
     on_progress: Callable[[int, int, str], None] | None = None,
     on_status: Callable[[str], None] | None = None,
+    concurrency: int = 8,
+    sleep_seconds: int = 0,
 ) -> dict:
     """先同步股票池，再按增量或全量补日 K。"""
     if not db_exists(db_path):
@@ -566,7 +577,14 @@ def run_market_sync(
         )
     calendar_start = min((item[1] for item in tasks), default=start_date)
     trading_days = fetch_trading_days(calendar_start, target)
-    written, failed = _run_tasks(db_path, tasks, trading_days, on_progress)
+    written, failed = _run_tasks(
+        db_path,
+        tasks,
+        trading_days,
+        on_progress,
+        concurrency=concurrency,
+        sleep_seconds=sleep_seconds,
+    )
     return {
         "written": written,
         "targets": len(tasks),
@@ -586,6 +604,8 @@ def run_incremental_sync(
     on_progress: Callable[[int, int, str], None] | None = None,
     start_date: str = "2024-01-01",
     on_status: Callable[[str], None] | None = None,
+    concurrency: int = 8,
+    sleep_seconds: int = 0,
 ) -> dict:
     return run_market_sync(
         db_path,
@@ -593,4 +613,6 @@ def run_incremental_sync(
         start_date=start_date,
         on_progress=on_progress,
         on_status=on_status,
+        concurrency=concurrency,
+        sleep_seconds=sleep_seconds,
     )

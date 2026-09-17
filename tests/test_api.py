@@ -84,4 +84,9 @@ def test_scheduler_seeds_and_ignores_start_date_env(tmp_path: Path, monkeypatch)
         assert "ma_volume" in keys
         updated = client.put("/api/scheduler", json={"start_date": "2021-05-01"}).json()
         assert updated["config"]["start_date"] == "2021-05-01"
+        assert snap["config"]["concurrency"] == 8
+        assert snap["config"]["sleep_seconds"] == 0
+        paced = client.put("/api/scheduler", json={"concurrency": 3, "sleep_seconds": 1}).json()
+        assert paced["config"]["concurrency"] == 3
+        assert paced["config"]["sleep_seconds"] == 1
 

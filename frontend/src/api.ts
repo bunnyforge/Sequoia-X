@@ -99,6 +99,8 @@ export type SchedulerSnapshot = {
     interval_seconds: number;
     retry_seconds: number;
     max_retries: number;
+    concurrency: number;
+    sleep_seconds: number;
     start_date: string;
   };
   state: string;

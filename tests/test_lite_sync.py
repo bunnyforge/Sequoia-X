@@ -124,3 +124,48 @@ def test_failed_symbol_retries_only_failed_day(tmp_path: Path) -> None:
         conn.commit()
     tasks = {symbol: (start, end) for symbol, start, end in build_missing_tasks(str(db_path), "2026-09-14")}
     assert tasks["000002"] == ("2026-09-11", "2026-09-11")
+
+
+def test_run_tasks_honors_concurrency(monkeypatch) -> None:
+    captured: dict[str, int] = {}
+
+    class FakePool:
+        def __init__(self, max_workers: int) -> None:
+            captured["max_workers"] = max_workers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def submit(self, fn, *args):
+            from concurrent.futures import Future
+
+            future: Future = Future()
+            future.set_result(("000001", 0, None))
+            return future
+
+    monkeypatch.setattr("sequoia_x.sync.lite_sync.ThreadPoolExecutor", FakePool)
+    from sequoia_x.sync.lite_sync import _run_tasks
+
+    tasks = [("000001", "a", "b"), ("000002", "a", "b"), ("000003", "a", "b")]
+    _run_tasks("db", tasks, [], None, concurrency=2, sleep_seconds=0)
+    assert captured["max_workers"] == 2
+
+
+def test_sync_one_sleeps_after_request(monkeypatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr("sequoia_x.sync.lite_sync.time.sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        "sequoia_x.sync.lite_sync._fetch_symbol",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr("sequoia_x.sync.lite_sync._upsert", lambda *_args, **_kwargs: 0)
+    from sequoia_x.sync.lite_sync import _sync_one
+
+    symbol, written, error = _sync_one("db", "000001", "2026-01-01", "2026-01-02", [], 3)
+    assert symbol == "000001"
+    assert written == 0
+    assert error == "boom"
+    assert sleeps == [3]

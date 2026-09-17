@@ -67,5 +67,7 @@ def test_legacy_json_migrates_into_db(tmp_path: Path) -> None:
     assert cfg["enabled"] is True
     assert cfg["interval_seconds"] == 120
     assert cfg["start_date"] == "2019-03-01"
+    assert cfg["concurrency"] == 8
+    assert cfg["sleep_seconds"] == 0
     assert not json_path.exists()
     assert json_path.with_name("sync_scheduler.json.migrated").exists()
