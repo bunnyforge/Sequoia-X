@@ -74,7 +74,6 @@ def test_dashboard_summary_empty_database(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_scheduler_seeds_and_ignores_start_date_env(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("DB_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("START_DATE", "1999-01-01")
 

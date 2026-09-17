@@ -1,4 +1,4 @@
-"""从本地数据库汇总控制台指标（Postgres 或 SQLite）。"""
+"""从本地 SQLite 汇总控制台指标。"""
 
 from sequoia_x.db import connect, db_exists, table_exists
 

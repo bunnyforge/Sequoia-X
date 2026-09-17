@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sequoia_x.core.config import bootstrap_app
 from sequoia_x.data.engine import DataEngine
 from sequoia_x.data.stats import collect_dashboard_stats, list_data_alerts
-from sequoia_x.db import resolve_dsn
+from sequoia_x.db import resolve_db_path
 from sequoia_x.sync.scheduler import SyncScheduler
 from sequoia_x.strategy.hub import StrategyHub
 
@@ -23,7 +23,7 @@ strategy_hub: StrategyHub | None = None
 
 
 def get_db_path() -> str:
-    return resolve_dsn()
+    return resolve_db_path()
 
 
 def invalidate_stats_cache() -> None:
@@ -59,12 +59,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
+        "http://127.0.0.1:5173",
         "http://localhost:8002",
         "http://127.0.0.1:8002",
-        "https://cursor.tail87959b.ts.net",
-        "http://100.76.76.54",
     ],
-    allow_origin_regex=r"https://.*\.ts\.net",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -18,9 +18,10 @@ ENV/
 
 # 数据库文件
 data/*.db
+data/*.db-wal
+data/*.db-shm
 data/*.migrated
 data/sync_scheduler.json
-data/postgres/
 backups/
 
 # 前端依赖与构建
