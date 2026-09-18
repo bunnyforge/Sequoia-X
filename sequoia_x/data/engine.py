@@ -25,8 +25,8 @@ CREATE TABLE IF NOT EXISTS stock_daily (
 );
 """
 
-_CREATE_INDEX_SQL = """
-CREATE INDEX IF NOT EXISTS idx_symbol_date ON stock_daily (symbol, date);
+_CREATE_DATE_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_stock_daily_date ON stock_daily (date);
 """
 
 _UPSERT_DAILY_SQL = """
@@ -90,9 +90,10 @@ class DataEngine:
 
     def _init_db(self) -> None:
         ensure_parent_dir(self.db_path)
-        with connect(self.db_path) as conn:
+        with connect(self.db_path, immediate=True) as conn:
             conn.execute(_CREATE_TABLE_SQL)
-            conn.execute(_CREATE_INDEX_SQL)
+            conn.execute(_CREATE_DATE_INDEX_SQL)
+            conn.execute("DROP INDEX IF EXISTS idx_symbol_date")
         from sequoia_x.sync.lite_sync import ensure_sync_state
 
         ensure_sync_state(self.db_path)
@@ -149,7 +150,7 @@ class DataEngine:
         from sequoia_x.sync.lite_sync import _UPSERT_STATE_SQL, ensure_sync_state
 
         ensure_sync_state(self.db_path)
-        with connect(self.db_path) as conn:
+        with connect(self.db_path, immediate=True) as conn:
             conn.executemany(_UPSERT_DAILY_SQL, rows)
             conn.executemany(
                 _UPSERT_STATE_SQL,

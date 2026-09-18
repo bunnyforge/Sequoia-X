@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import queue
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from typing import Callable
 
-from sequoia_x.db import column_names, connect, db_exists, ensure_parent_dir
+from sequoia_x.db import column_names, connect, db_exists, ensure_parent_dir, table_exists
 
 _UPSERT_SQL = """
 INSERT INTO stock_daily
@@ -49,6 +50,16 @@ ON CONFLICT(symbol) DO UPDATE SET
 
 _thread_state = threading.local()
 _write_lock = threading.Lock()
+_sync_state_lock = threading.Lock()
+_sync_state_ready: set[str] = set()
+_writer_lock = threading.Lock()
+_writers: dict[str, "_WriteCoordinator"] = {}
+_writer_refs: dict[str, int] = {}
+
+# Flush when enough symbols or rows are queued, or after a short idle.
+_WRITE_BATCH_ITEMS = 24
+_WRITE_BATCH_ROWS = 4_000
+_WRITE_FLUSH_IDLE_S = 0.04
 
 
 def _to_baostock_code(symbol: str) -> str:
@@ -71,35 +82,49 @@ def _day_before(value: str) -> str:
 
 def ensure_sync_state(db_path: str) -> None:
     """维护每只股票的首尾日期，避免每次扫描全部日 K。"""
-    ensure_parent_dir(db_path)
-    with connect(db_path) as conn:
-        conn.execute(_CREATE_STATE_SQL)
-        columns = column_names(conn, "stock_sync_state")
-        if "first_date" not in columns:
-            conn.execute("ALTER TABLE stock_sync_state ADD COLUMN first_date TEXT")
-        if "failed_date" not in columns:
-            conn.execute("ALTER TABLE stock_sync_state ADD COLUMN failed_date TEXT")
-        if "failed_reason" not in columns:
-            conn.execute("ALTER TABLE stock_sync_state ADD COLUMN failed_reason TEXT")
-        count = conn.execute("SELECT COUNT(*) FROM stock_sync_state").fetchone()[0]
-        if count == 0:
+    if db_path in _sync_state_ready:
+        return
+    with _sync_state_lock:
+        if db_path in _sync_state_ready:
+            return
+        ensure_parent_dir(db_path)
+        with connect(db_path, immediate=True) as conn:
+            conn.execute(_CREATE_STATE_SQL)
+            columns = column_names(conn, "stock_sync_state")
+            if "first_date" not in columns:
+                conn.execute("ALTER TABLE stock_sync_state ADD COLUMN first_date TEXT")
+            if "failed_date" not in columns:
+                conn.execute("ALTER TABLE stock_sync_state ADD COLUMN failed_date TEXT")
+            if "failed_reason" not in columns:
+                conn.execute("ALTER TABLE stock_sync_state ADD COLUMN failed_reason TEXT")
             conn.execute(
-                """
-                INSERT INTO stock_sync_state (symbol, last_date, first_date)
-                SELECT symbol, MAX(date), MIN(date) FROM stock_daily GROUP BY symbol
-                """
+                "CREATE INDEX IF NOT EXISTS idx_sync_state_last_date "
+                "ON stock_sync_state (last_date)"
             )
-        else:
             conn.execute(
-                """
-                UPDATE stock_sync_state
-                SET first_date = (
-                    SELECT MIN(date) FROM stock_daily
-                    WHERE stock_daily.symbol = stock_sync_state.symbol
+                "CREATE INDEX IF NOT EXISTS idx_sync_state_failed "
+                "ON stock_sync_state (failed_date) WHERE failed_date IS NOT NULL"
+            )
+            count = conn.execute("SELECT COUNT(*) FROM stock_sync_state").fetchone()[0]
+            if count == 0 and table_exists(conn, "stock_daily"):
+                conn.execute(
+                    """
+                    INSERT INTO stock_sync_state (symbol, last_date, first_date)
+                    SELECT symbol, MAX(date), MIN(date) FROM stock_daily GROUP BY symbol
+                    """
                 )
-                WHERE first_date IS NULL
-                """
-            )
+            elif count > 0 and table_exists(conn, "stock_daily"):
+                conn.execute(
+                    """
+                    UPDATE stock_sync_state
+                    SET first_date = (
+                        SELECT MIN(date) FROM stock_daily
+                        WHERE stock_daily.symbol = stock_sync_state.symbol
+                    )
+                    WHERE first_date IS NULL
+                    """
+                )
+        _sync_state_ready.add(db_path)
 
 
 def _latest_known_date(db_path: str) -> str | None:
@@ -188,7 +213,7 @@ def apply_universe(db_path: str, listed: set[str], start_date: str) -> dict:
         raise RuntimeError("股票列表为空，已跳过增删以免误删本地数据")
     ensure_sync_state(db_path)
     seed = _day_before(start_date)
-    with connect(db_path) as conn:
+    with connect(db_path, immediate=True) as conn:
         local = {
             row[0]
             for row in conn.execute("SELECT symbol FROM stock_sync_state")
@@ -399,14 +424,7 @@ def take_consecutive_bars(
     return kept, None
 
 
-def _upsert(
-    db_path: str,
-    rows: list[tuple],
-    *,
-    symbol: str,
-    failed_date: str | None,
-    failed_reason: str | None,
-) -> int:
+def _row_bounds(rows: list[tuple]) -> dict[str, tuple[str, str]]:
     bounds: dict[str, tuple[str, str]] = {}
     for item_symbol, trade_date, *_rest in rows:
         day = str(trade_date)
@@ -416,37 +434,207 @@ def _upsert(
         else:
             last_date, first_date = previous
             bounds[item_symbol] = (max(last_date, day), min(first_date, day))
+    return bounds
+
+
+def _apply_upserts(conn, items: list[dict]) -> None:
+    """Write many symbol upserts in one IMMEDIATE transaction."""
+    all_rows: list[tuple] = []
+    state_rows: list[tuple] = []
+    clear_fail: list[str] = []
+    empty_fail: list[tuple] = []
+    for item in items:
+        rows = item["rows"]
+        symbol = item["symbol"]
+        failed_date = item["failed_date"]
+        failed_reason = item["failed_reason"]
+        if rows:
+            all_rows.extend(rows)
+            for code, (last_date, first_date) in _row_bounds(rows).items():
+                state_rows.append((code, last_date, first_date, failed_date, failed_reason))
+        else:
+            empty_fail.append((failed_date, failed_reason, symbol))
+        if failed_date is None:
+            clear_fail.append(symbol)
+    if all_rows:
+        conn.executemany(_UPSERT_SQL, all_rows)
+    if state_rows:
+        conn.executemany(_UPSERT_STATE_SQL, state_rows)
+    for failed_date, failed_reason, symbol in empty_fail:
+        conn.execute(
+            """
+            UPDATE stock_sync_state
+            SET failed_date = ?, failed_reason = ?
+            WHERE symbol = ?
+            """,
+            (failed_date, failed_reason, symbol),
+        )
+    for symbol in clear_fail:
+        conn.execute(
+            """
+            UPDATE stock_sync_state
+            SET failed_date = NULL, failed_reason = NULL
+            WHERE symbol = ?
+            """,
+            (symbol,),
+        )
+
+
+def _upsert_now(
+    db_path: str,
+    rows: list[tuple],
+    *,
+    symbol: str,
+    failed_date: str | None,
+    failed_reason: str | None,
+) -> int:
     with _write_lock:
-        with connect(db_path) as conn:
-            if rows:
-                conn.executemany(_UPSERT_SQL, rows)
-                conn.executemany(
-                    _UPSERT_STATE_SQL,
-                    [
-                        (code, last_date, first_date, failed_date, failed_reason)
-                        for code, (last_date, first_date) in bounds.items()
-                    ],
-                )
-            else:
-                conn.execute(
-                    """
-                    UPDATE stock_sync_state
-                    SET failed_date = ?, failed_reason = ?
-                    WHERE symbol = ?
-                    """,
-                    (failed_date, failed_reason, symbol),
-                )
-            if failed_date is None:
-                conn.execute(
-                    """
-                    UPDATE stock_sync_state
-                    SET failed_date = NULL, failed_reason = NULL
-                    WHERE symbol = ?
-                    """,
-                    (symbol,),
-                )
+        with connect(db_path, immediate=True) as conn:
+            _apply_upserts(
+                conn,
+                [
+                    {
+                        "rows": rows,
+                        "symbol": symbol,
+                        "failed_date": failed_date,
+                        "failed_reason": failed_reason,
+                    }
+                ],
+            )
             conn.commit()
     return len(rows)
+
+
+class _WriteCoordinator:
+    """Single writer thread: fetch workers never hold the write lock during I/O,
+    and many symbols share one COMMIT (fewer WAL frames / busy wakes)."""
+
+    def __init__(self, db_path: str) -> None:
+        self.db_path = db_path
+        self._queue: queue.Queue = queue.Queue()
+        self._thread = threading.Thread(
+            target=self._loop, name="sequoia-sqlite-writer", daemon=True
+        )
+        self._thread.start()
+
+    def upsert(
+        self,
+        rows: list[tuple],
+        *,
+        symbol: str,
+        failed_date: str | None,
+        failed_reason: str | None,
+    ) -> int:
+        done = threading.Event()
+        box: dict = {}
+        self._queue.put(
+            {
+                "rows": rows,
+                "symbol": symbol,
+                "failed_date": failed_date,
+                "failed_reason": failed_reason,
+                "done": done,
+                "box": box,
+            }
+        )
+        if not done.wait(timeout=120):
+            raise TimeoutError(f"SQLite 写入超时：{symbol}")
+        if "exc" in box:
+            raise box["exc"]
+        return int(box.get("n") or 0)
+
+    def close(self) -> None:
+        self._queue.put(None)
+        self._thread.join(timeout=60)
+
+    def _loop(self) -> None:
+        batch: list[dict] = []
+        stopping = False
+        while not stopping:
+            timeout = _WRITE_FLUSH_IDLE_S if batch else None
+            try:
+                item = self._queue.get(timeout=timeout)
+            except queue.Empty:
+                self._flush(batch)
+                batch = []
+                continue
+            if item is None:
+                stopping = True
+            else:
+                batch.append(item)
+            if stopping or _should_flush(batch):
+                self._flush(batch)
+                batch = []
+        self._flush(batch)
+
+    def _flush(self, batch: list[dict]) -> None:
+        if not batch:
+            return
+        try:
+            with _write_lock:
+                with connect(self.db_path, immediate=True) as conn:
+                    _apply_upserts(conn, batch)
+                    conn.commit()
+        except Exception as exc:
+            for item in batch:
+                item["box"]["exc"] = exc
+                item["done"].set()
+            return
+        for item in batch:
+            item["box"]["n"] = len(item["rows"])
+            item["done"].set()
+
+
+def _should_flush(batch: list[dict]) -> bool:
+    if len(batch) >= _WRITE_BATCH_ITEMS:
+        return True
+    rows = sum(len(item["rows"]) for item in batch)
+    return rows >= _WRITE_BATCH_ROWS
+
+
+def _upsert(
+    db_path: str,
+    rows: list[tuple],
+    *,
+    symbol: str,
+    failed_date: str | None,
+    failed_reason: str | None,
+) -> int:
+    with _writer_lock:
+        coordinator = _writers.get(db_path)
+    if coordinator is not None:
+        return coordinator.upsert(
+            rows, symbol=symbol, failed_date=failed_date, failed_reason=failed_reason
+        )
+    return _upsert_now(
+        db_path,
+        rows,
+        symbol=symbol,
+        failed_date=failed_date,
+        failed_reason=failed_reason,
+    )
+
+
+def _acquire_writer(db_path: str) -> "_WriteCoordinator":
+    with _writer_lock:
+        refs = _writer_refs.get(db_path, 0)
+        if refs == 0:
+            _writers[db_path] = _WriteCoordinator(db_path)
+        _writer_refs[db_path] = refs + 1
+        return _writers[db_path]
+
+
+def _release_writer(db_path: str) -> None:
+    with _writer_lock:
+        refs = _writer_refs.get(db_path, 0) - 1
+        if refs <= 0:
+            writer = _writers.pop(db_path, None)
+            _writer_refs.pop(db_path, None)
+        else:
+            _writer_refs[db_path] = refs
+            writer = None
+    if writer is not None:
+        writer.close()
 
 
 def _sync_one(
@@ -518,6 +706,7 @@ def _run_tasks(
     completed = 0
     if on_progress:
         on_progress(0, len(tasks), "")
+    _acquire_writer(db_path)
     try:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
@@ -535,6 +724,7 @@ def _run_tasks(
                 if on_progress:
                     on_progress(completed, len(tasks), symbol)
     finally:
+        _release_writer(db_path)
         _reset_session()
     return written, failed
 
