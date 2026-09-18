@@ -33,7 +33,7 @@ def collect_dashboard_stats(db_path: str) -> dict:
 
         latest = conn.execute("SELECT MAX(date) FROM stock_daily").fetchone()[0]
         symbol_count = conn.execute(
-            "SELECT COUNT(*) FROM (SELECT symbol FROM stock_daily GROUP BY symbol) AS t"
+            "SELECT COUNT(DISTINCT symbol) FROM stock_daily"
         ).fetchone()[0]
         latest_count = conn.execute(
             "SELECT COUNT(*) FROM stock_daily WHERE date = ?",

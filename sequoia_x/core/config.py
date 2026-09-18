@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sequoia_x.db import DEFAULT_DB_PATH, resolve_db_path
+from sequoia_x.db import DEFAULT_DB_PATH, ensure_hot_indexes, resolve_db_path
 
 DEFAULT_START_DATE = "2024-01-01"
 DEFAULT_SQLITE_PATH = DEFAULT_DB_PATH
@@ -29,6 +29,7 @@ def bootstrap_app(db_path: str | None = None) -> dict:
     migrate_json_config(target, LEGACY_SYNC_JSON)
     cfg = load_config(target)
     ensure_strategy_tables(target)
+    ensure_hot_indexes(target)
     return cfg
 
 

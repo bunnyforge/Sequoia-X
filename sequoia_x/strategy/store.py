@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 
 from sequoia_x.db import connect, ensure_parent_dir
@@ -13,42 +14,52 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_strategy_lock = threading.Lock()
+_strategy_ready: set[str] = set()
+
+
 def ensure_strategy_tables(db_path: str) -> None:
-    ensure_parent_dir(db_path)
-    with connect(db_path) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS strategy_config (
-                strategy_key TEXT PRIMARY KEY,
-                enabled INTEGER NOT NULL DEFAULT 0,
-                params_json TEXT NOT NULL,
-                updated_at TEXT
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS strategy_run (
-                strategy_key TEXT PRIMARY KEY,
-                at TEXT,
-                ok INTEGER NOT NULL DEFAULT 0,
-                running INTEGER NOT NULL DEFAULT 0,
-                message TEXT,
-                picks_json TEXT,
-                extra_json TEXT
-            )
-            """
-        )
-        now = _now()
-        for item in CATALOG:
+    if db_path in _strategy_ready:
+        return
+    with _strategy_lock:
+        if db_path in _strategy_ready:
+            return
+        ensure_parent_dir(db_path)
+        with connect(db_path, immediate=True) as conn:
             conn.execute(
                 """
-                INSERT INTO strategy_config (strategy_key, enabled, params_json, updated_at)
-                VALUES (?, 0, ?, ?)
-                ON CONFLICT (strategy_key) DO NOTHING
-                """,
-                (item["key"], json.dumps(default_params(item["key"]), ensure_ascii=False), now),
+                CREATE TABLE IF NOT EXISTS strategy_config (
+                    strategy_key TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    params_json TEXT NOT NULL,
+                    updated_at TEXT
+                )
+                """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS strategy_run (
+                    strategy_key TEXT PRIMARY KEY,
+                    at TEXT,
+                    ok INTEGER NOT NULL DEFAULT 0,
+                    running INTEGER NOT NULL DEFAULT 0,
+                    message TEXT,
+                    picks_json TEXT,
+                    extra_json TEXT
+                )
+                """
+            )
+            now = _now()
+            for item in CATALOG:
+                conn.execute(
+                    """
+                    INSERT INTO strategy_config (strategy_key, enabled, params_json, updated_at)
+                    VALUES (?, 0, ?, ?)
+                    ON CONFLICT (strategy_key) DO NOTHING
+                    """,
+                    (item["key"], json.dumps(default_params(item["key"]), ensure_ascii=False), now),
+                )
+        _strategy_ready.add(db_path)
 
 
 def load_strategy_configs(db_path: str) -> dict[str, dict]:
@@ -96,7 +107,7 @@ def load_strategy_configs(db_path: str) -> dict[str, dict]:
 def save_strategy_config(db_path: str, key: str, enabled: bool, params: dict) -> None:
     ensure_strategy_tables(db_path)
     merged = {**default_params(key), **params}
-    with connect(db_path) as conn:
+    with connect(db_path, immediate=True) as conn:
         conn.execute(
             """
             INSERT INTO strategy_config (strategy_key, enabled, params_json, updated_at)
@@ -112,7 +123,7 @@ def save_strategy_config(db_path: str, key: str, enabled: bool, params: dict) ->
 
 def save_strategy_run(db_path: str, key: str, fields: dict) -> None:
     ensure_strategy_tables(db_path)
-    with connect(db_path) as conn:
+    with connect(db_path, immediate=True) as conn:
         current = conn.execute(
             "SELECT at, ok, running, message, picks_json, extra_json FROM strategy_run WHERE strategy_key = ?",
             (key,),

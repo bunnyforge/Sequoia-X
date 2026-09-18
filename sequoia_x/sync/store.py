@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import date, datetime, timezone
-
 from pathlib import Path
 
 from sequoia_x.db import column_names, connect, ensure_parent_dir, table_exists
@@ -77,104 +77,114 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_control_lock = threading.Lock()
+_control_ready: set[str] = set()
+
+
 def ensure_control_tables(db_path: str) -> None:
-    ensure_parent_dir(db_path)
-    with connect(db_path) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sync_config (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                enabled INTEGER NOT NULL DEFAULT 0,
-                interval_seconds INTEGER NOT NULL DEFAULT 300,
-                retry_seconds INTEGER NOT NULL DEFAULT 30,
-                max_retries INTEGER NOT NULL DEFAULT 3,
-                start_date TEXT NOT NULL DEFAULT '2024-01-01',
-                concurrency INTEGER NOT NULL DEFAULT 8,
-                sleep_seconds INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT
-            )
-            """
-        )
-        _ensure_sync_config_columns(conn)
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sync_progress (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                state TEXT,
-                running INTEGER NOT NULL DEFAULT 0,
-                mode TEXT,
-                attempt INTEGER NOT NULL DEFAULT 0,
-                current INTEGER NOT NULL DEFAULT 0,
-                total INTEGER NOT NULL DEFAULT 0,
-                symbol TEXT,
-                message TEXT,
-                last_run_at TEXT,
-                next_run_at TEXT,
-                last_error TEXT,
-                last_message TEXT,
-                updated_at TEXT
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sync_run (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                at TEXT NOT NULL,
-                ok INTEGER NOT NULL,
-                triggered TEXT,
-                message TEXT,
-                error TEXT,
-                written INTEGER NOT NULL DEFAULT 0,
-                targets INTEGER NOT NULL DEFAULT 0,
-                failed_count INTEGER NOT NULL DEFAULT 0
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sync_job (
-                job_key TEXT PRIMARY KEY,
-                state TEXT,
-                running INTEGER NOT NULL DEFAULT 0,
-                mode TEXT,
-                attempt INTEGER NOT NULL DEFAULT 0,
-                current INTEGER NOT NULL DEFAULT 0,
-                total INTEGER NOT NULL DEFAULT 0,
-                symbol TEXT,
-                message TEXT,
-                last_run_at TEXT,
-                next_run_at TEXT,
-                last_error TEXT,
-                last_message TEXT,
-                updated_at TEXT
-            )
-            """
-        )
-        now = _now()
-        for job_key, _label in JOB_DEFS:
+    if db_path in _control_ready:
+        return
+    with _control_lock:
+        if db_path in _control_ready:
+            return
+        ensure_parent_dir(db_path)
+        with connect(db_path, immediate=True) as conn:
             conn.execute(
                 """
-                INSERT INTO sync_job (job_key, state, mode, updated_at)
-                VALUES (?, 'idle', ?, ?)
-                ON CONFLICT (job_key) DO NOTHING
-                """,
-                (job_key, "full" if job_key == "full" else "incremental", now),
+                CREATE TABLE IF NOT EXISTS sync_config (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    interval_seconds INTEGER NOT NULL DEFAULT 300,
+                    retry_seconds INTEGER NOT NULL DEFAULT 30,
+                    max_retries INTEGER NOT NULL DEFAULT 3,
+                    start_date TEXT NOT NULL DEFAULT '2024-01-01',
+                    concurrency INTEGER NOT NULL DEFAULT 8,
+                    sleep_seconds INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT
+                )
+                """
             )
-        conn.execute(
-            """
-            INSERT INTO sync_config (id, updated_at) VALUES (1, ?)
-            ON CONFLICT (id) DO NOTHING
-            """,
-            (now,),
-        )
-        conn.execute(
-            """
-            INSERT INTO sync_progress (id, state, updated_at) VALUES (1, 'idle', ?)
-            ON CONFLICT (id) DO NOTHING
-            """,
-            (now,),
-        )
+            _ensure_sync_config_columns(conn)
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sync_progress (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    state TEXT,
+                    running INTEGER NOT NULL DEFAULT 0,
+                    mode TEXT,
+                    attempt INTEGER NOT NULL DEFAULT 0,
+                    current INTEGER NOT NULL DEFAULT 0,
+                    total INTEGER NOT NULL DEFAULT 0,
+                    symbol TEXT,
+                    message TEXT,
+                    last_run_at TEXT,
+                    next_run_at TEXT,
+                    last_error TEXT,
+                    last_message TEXT,
+                    updated_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sync_run (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    at TEXT NOT NULL,
+                    ok INTEGER NOT NULL,
+                    triggered TEXT,
+                    message TEXT,
+                    error TEXT,
+                    written INTEGER NOT NULL DEFAULT 0,
+                    targets INTEGER NOT NULL DEFAULT 0,
+                    failed_count INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sync_job (
+                    job_key TEXT PRIMARY KEY,
+                    state TEXT,
+                    running INTEGER NOT NULL DEFAULT 0,
+                    mode TEXT,
+                    attempt INTEGER NOT NULL DEFAULT 0,
+                    current INTEGER NOT NULL DEFAULT 0,
+                    total INTEGER NOT NULL DEFAULT 0,
+                    symbol TEXT,
+                    message TEXT,
+                    last_run_at TEXT,
+                    next_run_at TEXT,
+                    last_error TEXT,
+                    last_message TEXT,
+                    updated_at TEXT
+                )
+                """
+            )
+            now = _now()
+            for job_key, _label in JOB_DEFS:
+                conn.execute(
+                    """
+                    INSERT INTO sync_job (job_key, state, mode, updated_at)
+                    VALUES (?, 'idle', ?, ?)
+                    ON CONFLICT (job_key) DO NOTHING
+                    """,
+                    (job_key, "full" if job_key == "full" else "incremental", now),
+                )
+            conn.execute(
+                """
+                INSERT INTO sync_config (id, updated_at) VALUES (1, ?)
+                ON CONFLICT (id) DO NOTHING
+                """,
+                (now,),
+            )
+            conn.execute(
+                """
+                INSERT INTO sync_progress (id, state, updated_at) VALUES (1, 'idle', ?)
+                ON CONFLICT (id) DO NOTHING
+                """,
+                (now,),
+            )
+        _control_ready.add(db_path)
 
 
 def _ensure_sync_config_columns(conn) -> None:
@@ -233,7 +243,7 @@ def load_config(db_path: str) -> dict:
 def save_config(db_path: str, config: dict) -> None:
     ensure_control_tables(db_path)
     cfg = clamp_config(config)
-    with connect(db_path) as conn:
+    with connect(db_path, immediate=True) as conn:
         conn.execute(
             """
             INSERT INTO sync_config (
@@ -325,7 +335,7 @@ def save_job(db_path: str, job_key: str, fields: dict) -> None:
     values = list(payload.values())
     values.append(_now())
     values.append(job_key)
-    with connect(db_path) as conn:
+    with connect(db_path, immediate=True) as conn:
         conn.execute(
             f"UPDATE sync_job SET {assignments}, updated_at = ? WHERE job_key = ?",
             values,
@@ -424,7 +434,7 @@ def save_progress(db_path: str, fields: dict) -> None:
     assignments = ", ".join(f"{key} = ?" for key in payload)
     values = list(payload.values())
     values.append(_now())
-    with connect(db_path) as conn:
+    with connect(db_path, immediate=True) as conn:
         conn.execute(
             f"UPDATE sync_progress SET {assignments}, updated_at = ? WHERE id = 1",
             values,
@@ -434,7 +444,7 @@ def save_progress(db_path: str, fields: dict) -> None:
 
 def append_run(db_path: str, run: dict) -> None:
     ensure_control_tables(db_path)
-    with connect(db_path) as conn:
+    with connect(db_path, immediate=True) as conn:
         conn.execute(
             """
             INSERT INTO sync_run (at, ok, triggered, message, error, written, targets, failed_count)
